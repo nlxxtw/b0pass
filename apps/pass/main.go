@@ -52,6 +52,8 @@ func run() {
 	}
 	engine.Print(aurora.Green("App pass loaded"), aurora.BrightCyan(config))
 	engine.Gin.Use(engine.CorsMiddleware())
+	// 大文件 multipart：内存只留 32MB，其余落临时盘，避免整文件进内存
+	engine.Gin.MaxMultipartMemory = 32 << 20
 	initSessionStore()
 	routeStatic(config.Live)
 	routeApi()

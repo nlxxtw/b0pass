@@ -45,6 +45,13 @@
     return b ? b.dataset.mode : "collect";
   }
 
+  function closeStats() {
+    var card = $("statsCard");
+    if (card) card.hidden = true;
+    state.statsId = "";
+    state.stats = null;
+  }
+
   function syncModeUI() {
     var mode = currentMode();
     var collect = mode === "collect";
@@ -54,6 +61,8 @@
     $("collectFolderField").style.display = collect ? "" : "none";
     $("sharePathField").hidden = collect;
     $("sharePathField").style.display = collect ? "none" : "";
+    $("accessPwdField").hidden = collect;
+    $("accessPwdField").style.display = collect ? "none" : "";
     var createBtn = $("createBtn");
     createBtn.className = "btn block " + (collect ? "collect" : "");
     createBtn.textContent = collect ? "创建收作业" : "创建发资料";
@@ -61,6 +70,8 @@
     if (collect && !$("folder").value.trim()) {
       $("folder").value = todayFolder();
     }
+    // 切换收作业/发资料时关掉详情，避免串台
+    closeStats();
     renderList();
   }
 
@@ -156,8 +167,11 @@
           : s.sharePath || "";
         var where = shortPath(whereFull);
         var extra = "";
+        if (!isCollect && s.needPassword) {
+          extra += " · 需密码";
+        }
         if (!isCollect && (s.downloadCount || 0) > 0) {
-          extra = " · 下载 " + s.downloadCount + " 人";
+          extra += " · 下载 " + s.downloadCount + " 人";
         }
         return (
           '<li class="sess-item">' +
@@ -202,14 +216,118 @@
     });
   }
 
-  async function pickFolder(anyLocal) {
-    NP.toast("请在弹出的窗口里选择文件夹…");
+  async function pickFolder(anyLocal, kind) {
+    kind = kind || "folder";
+    NP.toast(kind === "any" ? "请选择文件或文件夹…" : kind === "file" ? "请选择文件…" : "请选择文件夹…");
     try {
-      var q = anyLocal ? "?any=1" : "";
+      var q = (anyLocal ? "?any=1" : "?any=0") + "&kind=" + encodeURIComponent(kind);
       return await NP.api("/pass/session/pick-folder" + q, { method: "POST", json: {} });
     } catch (e) {
       NP.toast(e.message);
       return null;
+    }
+  }
+
+  function looksLikePath(s) {
+    s = String(s || "").trim().replace(/^["']|["']$/g, "");
+    if (!s) return false;
+    if (/^[a-zA-Z]:[\\/]/.test(s)) return true;
+    if (/^\\\\[^\\]+\\/.test(s)) return true;
+    if (/^file:/i.test(s)) return true;
+    return false;
+  }
+
+  function pathFromDataTransfer(dt) {
+    if (!dt) return "";
+    var plain = (dt.getData("text/plain") || dt.getData("Text") || "").trim();
+    if (looksLikePath(plain)) {
+      return plain.split(/\r?\n/)[0].trim().replace(/^["']|["']$/g, "");
+    }
+    var uri = (dt.getData("text/uri-list") || "").trim();
+    if (uri) {
+      var line = uri.split(/\r?\n/).filter(function (l) {
+        return l && l.charAt(0) !== "#";
+      })[0];
+      if (line && /^file:/i.test(line)) return line.trim();
+    }
+    if (dt.files && dt.files.length) {
+      var f = dt.files[0];
+      if (f && (f.path || f.mozFullPath)) return f.path || f.mozFullPath;
+    }
+    return "";
+  }
+
+  async function applySharePath(raw) {
+    if (!raw) return false;
+    try {
+      var data = await NP.api("/pass/session/resolve-path", {
+        method: "POST",
+        json: { path: raw },
+      });
+      var p = (data && (data.sharePath || data.abs)) || "";
+      if (!p) return false;
+      $("sharePath").value = p;
+      NP.toast("已识别路径");
+      return true;
+    } catch (e) {
+      NP.toast(e.message || "路径无效");
+      return false;
+    }
+  }
+
+  function wireSharePathDrop() {
+    var zone = $("sharePathDrop");
+    var input = $("sharePath");
+    if (!zone || zone._dropWired) return;
+    zone._dropWired = true;
+
+    function setOver(on) {
+      if (on) zone.classList.add("drag-over");
+      else zone.classList.remove("drag-over");
+    }
+
+    // 浏览器出于安全不给网页读本机绝对路径；能读到则填入，否则弹出本机选择框
+    ["dragenter", "dragover"].forEach(function (ev) {
+      zone.addEventListener(ev, function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOver(true);
+        if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+      });
+    });
+    zone.addEventListener("dragleave", function (e) {
+      if (zone.contains(e.relatedTarget)) return;
+      setOver(false);
+    });
+    zone.addEventListener("drop", async function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      setOver(false);
+      var p = pathFromDataTransfer(e.dataTransfer);
+      if (p) {
+        await applySharePath(p);
+        return;
+      }
+      var data = await pickFolder(true);
+      if (data && (data.sharePath || data.abs)) {
+        $("sharePath").value = data.sharePath || data.abs;
+      }
+    });
+    if (input) {
+      input.addEventListener("paste", function (e) {
+        var text =
+          (e.clipboardData && e.clipboardData.getData("text")) ||
+          (window.clipboardData && window.clipboardData.getData("Text")) ||
+          "";
+        text = String(text || "").trim();
+        if (!looksLikePath(text)) return;
+        e.preventDefault();
+        applySharePath(text);
+      });
+      input.addEventListener("change", function () {
+        var v = (input.value || "").trim();
+        if (looksLikePath(v)) applySharePath(v);
+      });
     }
   }
 
@@ -366,9 +484,23 @@
     } else {
       body.sharePath = ($("sharePath").value || "").trim();
       if (!body.sharePath) {
-        NP.toast("请选择要发给学生的本地文件夹");
+        NP.toast("请选择要发给学生的文件或文件夹");
         return;
       }
+      try {
+        var resolved = await NP.api("/pass/session/resolve-path", {
+          method: "POST",
+          json: { path: body.sharePath },
+        });
+        if (resolved && (resolved.sharePath || resolved.abs)) {
+          body.sharePath = resolved.sharePath || resolved.abs;
+          $("sharePath").value = body.sharePath;
+        }
+      } catch (re) {
+        NP.toast(re.message || "路径无效");
+        return;
+      }
+      body.accessPassword = ($("accessPwd").value || "").trim();
     }
     try {
       var sess = await NP.api("/pass/session/create", { method: "POST", json: body });
@@ -377,6 +509,7 @@
         $("folder").value = todayFolder();
       } else {
         $("sharePath").value = "";
+        $("accessPwd").value = "";
       }
       await loadList({ force: true });
       NP.toast(
@@ -410,12 +543,19 @@
       if (!data) return;
       $("folder").value = data.abs || data.sharePath || data.folder || "";
     };
-    $("pickShareBtn").onclick = async function () {
-      var data = await pickFolder(true);
-      if (data && (data.sharePath || data.abs)) {
-        $("sharePath").value = data.sharePath || data.abs;
-      }
+    async function applyPickedShare(data) {
+      if (!data || !(data.sharePath || data.abs)) return;
+      $("sharePath").value = data.sharePath || data.abs;
+      if (data.wasFile) NP.toast("已填入该文件所在文件夹");
+      else NP.toast("已填入文件夹路径");
+    }
+    $("pickShareFileBtn").onclick = async function () {
+      await applyPickedShare(await pickFolder(true, "file"));
     };
+    $("pickShareBtn").onclick = async function () {
+      await applyPickedShare(await pickFolder(true, "folder"));
+    };
+    wireSharePathDrop();
     $("statsPickBtn").onclick = changeStatsFolder;
     $("statsOpenBtn").onclick = function () {
       if (!state.statsId) return;
@@ -446,8 +586,7 @@
       });
     };
     $("statsClose").onclick = function () {
-      $("statsCard").hidden = true;
-      state.statsId = "";
+      closeStats();
     };
     $("logoutBtn").onclick = function () {
       NP.clearAuth();

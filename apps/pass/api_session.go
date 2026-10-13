@@ -1,18 +1,19 @@
 package app
 
 import (
-	"b0go/apps/pass/lib/files"
 	"b0go/apps/pass/lib/folderdialog"
 	"b0go/apps/pass/session"
 	"b0go/core/engine"
 	"b0go/core/tools/cmd"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ func SessionCreate(c *gin.Context) {
 		CanDownloadOthers    bool   `json:"canDownloadOthers"`
 		CanDownloadMaterials bool   `json:"canDownloadMaterials"`
 		Deadline             string `json:"deadline"`
+		AccessPassword       string `json:"accessPassword"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil {
 		body.Name = c.Query("name")
@@ -48,6 +50,7 @@ func SessionCreate(c *gin.Context) {
 		body.CanDownloadOthers = c.Query("canDownloadOthers") == "1" || c.Query("canDownloadOthers") == "true"
 		body.CanDownloadMaterials = c.Query("canDownloadMaterials") != "0" && c.Query("canDownloadMaterials") != "false"
 		body.Deadline = c.Query("deadline")
+		body.AccessPassword = c.Query("accessPassword")
 		if body.Name == "" {
 			engine.ERR("参数错误", c)
 			return
@@ -56,12 +59,40 @@ func SessionCreate(c *gin.Context) {
 	if body.Mode == "" {
 		body.Mode = session.ModeCollect
 	}
-	sess, err := sessStore.Create(body.Name, body.Folder, body.SharePath, body.Mode, body.RequireIdentity, body.CanSeeOthers, body.CanDownloadOthers, body.CanDownloadMaterials, body.Deadline)
+	sess, err := sessStore.Create(body.Name, body.Folder, body.SharePath, body.Mode, body.RequireIdentity, body.CanSeeOthers, body.CanDownloadOthers, body.CanDownloadMaterials, body.Deadline, body.AccessPassword)
 	if err != nil {
 		engine.ERR(err.Error(), c)
 		return
 	}
 	engine.OK("OK", sess, c)
+}
+
+func accessPwdFrom(c *gin.Context) string {
+	pwd := c.Query("pwd")
+	if pwd == "" {
+		pwd = c.GetHeader("X-Access-Password")
+	}
+	return pwd
+}
+
+func publicSessionView(s *session.Session) gin.H {
+	if s == nil {
+		return nil
+	}
+	return gin.H{
+		"id":                   s.ID,
+		"name":                 s.Name,
+		"folder":               s.Folder,
+		"mode":                 s.Mode,
+		"requireIdentity":      s.RequireIdentity,
+		"canSeeOthers":         s.CanSeeOthers,
+		"canDownloadOthers":    s.CanDownloadOthers,
+		"canDownloadMaterials": s.CanDownloadMaterials,
+		"deadline":             s.Deadline,
+		"createdAt":            s.CreatedAt,
+		"needPassword":         sessStore.NeedPassword(s),
+		"expired":              sessStore.IsPastDeadline(s),
+	}
 }
 
 func SessionList(c *gin.Context) {
@@ -89,6 +120,7 @@ func SessionList(c *gin.Context) {
 		}
 		if s.Mode == session.ModeDistribute {
 			item["downloadCount"] = sessStore.ReadDownloads(s).UniqueIPTotal()
+			item["needPassword"] = sessStore.NeedPassword(s)
 		}
 		list = append(list, item)
 	}
@@ -220,12 +252,118 @@ func SessionFolders(c *gin.Context) {
 	}, c)
 }
 
-// SessionPickFolder 本机弹窗选文件夹。
-// any=1（默认推荐）：任意盘绝对路径；any=0：仅 files 下相对目录（兼容旧逻辑）。
+// SessionCaptureDrop 本机拖放识别路径（不上传、不拷贝，只填绝对路径）。
+// 若拖入的是文件，则填入其所在文件夹（发资料需要目录）。
+func SessionCaptureDrop(c *gin.Context) {
+	var body struct {
+		X int `json:"x"`
+		Y int `json:"y"`
+		W int `json:"w"`
+		H int `json:"h"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	folderdialog.ClearCaptureDropFlags()
+	picked, err := folderdialog.CaptureDrop(20*time.Second, folderdialog.DropRect{
+		X: body.X, Y: body.Y, W: body.W, H: body.H,
+	})
+	if err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
+	if picked == "" {
+		engine.OK("OK", gin.H{"abs": "", "sharePath": "", "cancelled": true}, c)
+		return
+	}
+	share, wasFile, err := normalizeLocalSharePath(picked)
+	if err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
+	engine.OK("OK", gin.H{
+		"abs":       share,
+		"sharePath": share,
+		"folder":    filepath.Base(share),
+		"wasFile":   wasFile,
+		"source":    picked,
+	}, c)
+}
+
+// SessionResolvePath 校验/规范化本机路径（粘贴或浏览器能读到的路径）。
+func SessionResolvePath(c *gin.Context) {
+	var body struct {
+		Path string `json:"path"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	if body.Path == "" {
+		body.Path = c.Query("path")
+	}
+	share, wasFile, err := normalizeLocalSharePath(body.Path)
+	if err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
+	engine.OK("OK", gin.H{
+		"abs":       share,
+		"sharePath": share,
+		"folder":    filepath.Base(share),
+		"wasFile":   wasFile,
+		"source":    strings.TrimSpace(body.Path),
+	}, c)
+}
+
+func normalizeLocalSharePath(raw string) (share string, wasFile bool, err error) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.Trim(raw, `"'`)
+	raw = strings.TrimPrefix(raw, "\ufeff")
+	if raw == "" {
+		return "", false, errors.New("路径为空")
+	}
+	// file:///C:/... → C:\...
+	if strings.HasPrefix(strings.ToLower(raw), "file:") {
+		u := raw
+		u = strings.TrimPrefix(u, "file://")
+		u = strings.TrimPrefix(u, "file:")
+		u = strings.TrimPrefix(u, "//")
+		if idx := strings.Index(u, "?"); idx >= 0 {
+			u = u[:idx]
+		}
+		if unesc, e := url.QueryUnescape(u); e == nil {
+			u = unesc
+		}
+		u = strings.ReplaceAll(u, "/", `\`)
+		if strings.HasPrefix(u, `\`) && len(u) > 2 && u[2] == ':' {
+			// \C:\path
+			u = u[1:]
+		}
+		if strings.HasPrefix(strings.ToLower(u), `localhost\`) {
+			u = u[len(`localhost\`):]
+		}
+		raw = u
+	}
+	abs, err := filepath.Abs(filepath.Clean(raw))
+	if err != nil {
+		return "", false, err
+	}
+	st, err := os.Stat(abs)
+	if err != nil {
+		return "", false, errors.New("路径不存在：" + abs)
+	}
+	if st.IsDir() {
+		return abs, false, nil
+	}
+	return filepath.Dir(abs), true, nil
+}
+
+// SessionPickFolder 本机弹窗选择。
+// any=1：任意盘；any=0：仅 files 下。
+// kind=folder|file|any：只选文件夹 / 只选文件 / 询问文件或文件夹（发资料用 any）。
 func SessionPickFolder(c *gin.Context) {
-	// 未传 any 时按任意盘；显式 any=0 才限制在 files 下
 	q := c.Query("any")
 	anyLocal := q != "0" && q != "false"
+	kind := strings.ToLower(strings.TrimSpace(c.Query("kind")))
+	if kind == "" {
+		kind = "folder"
+	}
 	start := ""
 	title := "选择本机文件夹（可任选磁盘）"
 	if anyLocal {
@@ -239,25 +377,47 @@ func SessionPickFolder(c *gin.Context) {
 		_ = os.MkdirAll(absRoot, 0755)
 		start = absRoot
 	}
-	picked, err := folderdialog.Pick(start, title)
+
+	var picked string
+	var err error
+	switch kind {
+	case "file":
+		picked, err = folderdialog.PickFile(start, "选择本机文件")
+	case "any", "both":
+		picked, err = folderdialog.PickFileOrFolder(start)
+	default:
+		picked, err = folderdialog.Pick(start, title)
+	}
 	if err != nil {
 		engine.ERR(err.Error(), c)
 		return
 	}
 	if picked == "" {
-		engine.ERR("未选择目录", c)
+		engine.ERR("未选择", c)
 		return
 	}
-	if anyLocal {
-		engine.OK("OK", gin.H{"abs": picked, "sharePath": picked, "folder": filepath.Base(picked)}, c)
-		return
-	}
-	rel, err := sessStore.RelFromAbs(picked)
+
+	share, wasFile, err := normalizeLocalSharePath(picked)
 	if err != nil {
 		engine.ERR(err.Error(), c)
 		return
 	}
-	engine.OK("OK", gin.H{"folder": rel, "abs": picked}, c)
+	if !anyLocal {
+		rel, err := sessStore.RelFromAbs(share)
+		if err != nil {
+			engine.ERR(err.Error(), c)
+			return
+		}
+		engine.OK("OK", gin.H{"folder": rel, "abs": share, "wasFile": wasFile, "source": picked}, c)
+		return
+	}
+	engine.OK("OK", gin.H{
+		"abs":       share,
+		"sharePath": share,
+		"folder":    filepath.Base(share),
+		"wasFile":   wasFile,
+		"source":    picked,
+	}, c)
 }
 
 // PublicReveal 学生端查看：打开老师主机上的本地路径
@@ -326,9 +486,9 @@ func SessionReveal(c *gin.Context) {
 		engine.ERR("本地路径不存在: "+target, c)
 		return
 	}
-	log.Println("SessionReveal cmd.Open:", target)
-	// 与原版 /pass/cmd-open 相同：cmd.Open → Windows cmd /c start
-	if err := cmd.Open(target); err != nil {
+	log.Println("SessionReveal:", target)
+	// 本地目录/文件用 explorer，避免 cmd start 对中文路径偶发失败
+	if err := cmd.Reveal(target); err != nil {
 		engine.ERR("打开失败: "+err.Error(), c)
 		return
 	}
@@ -447,7 +607,6 @@ func PublicSessions(c *gin.Context) {
 			"id":                   s.ID,
 			"name":                 s.Name,
 			"folder":               s.Folder,
-			"sharePath":            s.SharePath,
 			"mode":                 s.Mode,
 			"requireIdentity":      s.RequireIdentity,
 			"canSeeOthers":         s.CanSeeOthers,
@@ -456,6 +615,7 @@ func PublicSessions(c *gin.Context) {
 			"deadline":             s.Deadline,
 			"createdAt":            s.CreatedAt,
 			"expired":              sessStore.IsPastDeadline(s),
+			"needPassword":         sessStore.NeedPassword(s),
 			"submitted":            false,
 			"submittedAt":          "",
 		}
@@ -483,6 +643,10 @@ func PublicFiles(c *gin.Context) {
 		engine.OK("OK", gin.H{"materials": []any{}, "submissions": []any{}}, c)
 		return
 	}
+	if err := sessStore.CheckAccessPassword(sess, accessPwdFrom(c)); err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
 	sid := c.Query("studentId")
 	sname := c.Query("studentName")
 	anon := c.Query("anonId")
@@ -504,7 +668,7 @@ func PublicFiles(c *gin.Context) {
 		}
 	}
 	engine.OK("OK", gin.H{
-		"session":     sess,
+		"session":     publicSessionView(sess),
 		"materials":   materials,
 		"submissions": submissions,
 		"expired":     sessStore.IsPastDeadline(sess),
@@ -521,6 +685,10 @@ func PublicDownload(c *gin.Context) {
 	rel := c.Query("f")
 	if rel == "" {
 		engine.ERR("路径不能为空", c)
+		return
+	}
+	if err := sessStore.CheckAccessPassword(sess, accessPwdFrom(c)); err != nil {
+		engine.ERR(err.Error(), c)
 		return
 	}
 	relSlash := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
@@ -656,26 +824,91 @@ func serveAttachment(c *gin.Context, abs, fileName string) {
 	http.ServeContent(c.Writer, c.Request, fileName, st.ModTime(), f)
 }
 
-// passUploadToDir 学生/资料上传：直接复用原版 FileUpload 分流
-// Content-Length > 4096 → FileUploadBig（stream 流式）；否则 FileUploadTiny
+// passUploadToDir 学生/资料上传。
+// 注意：不能对 Windows 绝对路径走 cleanPath/path.Join（会截断盘符路径），
+// 也不能在未校验可靠时用旧 stream 解析——半截文件会被删掉表现为「闪一下没了」。
+// 这里用 Gin FormFile + 临时文件改名，大文件由 multipart 落盘，与原版「能传完」一致。
 func passUploadToDir(dir string, c *gin.Context) {
-	dir = cleanPath(filepath.ToSlash(dir))
-	if !strings.HasSuffix(dir, "/") {
-		dir += "/"
+	dir = filepath.Clean(dir)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Println("passUploadToDir mkdir fail:", dir, err)
+		engine.ERR("无法创建上传目录", c)
+		return
 	}
-	_ = os.MkdirAll(filepath.FromSlash(strings.TrimSuffix(dir, "/")), 0755)
-	_ = files.NodeAdd(dir)
 
-	lens := 0
-	if hs, ok := c.Request.Header["Content-Length"]; ok && len(hs) > 0 {
-		lens, _ = strconv.Atoi(hs[0])
+	file, err := c.FormFile("file")
+	if err != nil {
+		log.Println("passUploadToDir FormFile:", err)
+		engine.ERR("请先选择文件", c)
+		return
 	}
-	log.Println("passUploadToDir::::", lens, dir)
-	if lens > 4096 {
-		FileUploadBig(dir, c)
-	} else {
-		FileUploadTiny(dir, c)
+	name := filepath.Base(file.Filename)
+	name = strings.ReplaceAll(name, "\\", "_")
+	name = strings.ReplaceAll(name, "/", "_")
+	if name == "" || name == "." || name == ".." {
+		engine.ERR("文件名无效", c)
+		return
 	}
+
+	final := filepath.Join(dir, name)
+	tmp := final + uploadTmpSuffix
+	_ = os.Remove(tmp)
+
+	log.Printf("passUploadToDir:::: size=%d name=%s dir=%s\n", file.Size, name, dir)
+	if err := c.SaveUploadedFile(file, tmp); err != nil {
+		_ = os.Remove(tmp)
+		log.Println("passUploadToDir SaveUploadedFile:", err)
+		engine.ERR("上传失败: "+err.Error(), c)
+		return
+	}
+
+	st, err := os.Stat(tmp)
+	if err != nil {
+		_ = os.Remove(tmp)
+		engine.ERR("上传失败: 无法读取临时文件", c)
+		return
+	}
+	if file.Size > 0 && st.Size() != file.Size {
+		log.Printf("passUploadToDir size mismatch: got=%d want=%d\n", st.Size(), file.Size)
+		_ = os.Remove(tmp)
+		engine.ERR("上传不完整，请重新上传", c)
+		return
+	}
+	if st.Size() == 0 && file.Size > 0 {
+		_ = os.Remove(tmp)
+		engine.ERR("上传失败: 文件为空", c)
+		return
+	}
+
+	_ = os.Remove(final)
+	if err := os.Rename(tmp, final); err != nil {
+		// Windows 上偶发占用：退化成拷贝
+		in, errOpen := os.Open(tmp)
+		if errOpen != nil {
+			_ = os.Remove(tmp)
+			engine.ERR("保存文件失败: "+err.Error(), c)
+			return
+		}
+		out, errCreate := os.Create(final)
+		if errCreate != nil {
+			in.Close()
+			_ = os.Remove(tmp)
+			engine.ERR("保存文件失败: "+errCreate.Error(), c)
+			return
+		}
+		_, copyErr := io.Copy(out, in)
+		in.Close()
+		out.Close()
+		_ = os.Remove(tmp)
+		if copyErr != nil {
+			_ = os.Remove(final)
+			engine.ERR("保存文件失败: "+copyErr.Error(), c)
+			return
+		}
+	}
+
+	log.Printf("passUploadToDir OK:::: %s (%d bytes)\n", final, st.Size())
+	engine.OK("上传成功", gin.H{"name": name, "size": st.Size()}, c)
 }
 
 // Public upload homework

@@ -26,6 +26,31 @@
     return null;
   }
 
+  function pwdKey(id) {
+    return "np_access_" + id;
+  }
+  function getSavedPwd(id) {
+    try {
+      return sessionStorage.getItem(pwdKey(id)) || "";
+    } catch (e) {
+      return "";
+    }
+  }
+  function savePwd(id, pwd) {
+    try {
+      if (pwd) sessionStorage.setItem(pwdKey(id), pwd);
+      else sessionStorage.removeItem(pwdKey(id));
+    } catch (e) {}
+  }
+  function identityQueryWithPwd(id, extra) {
+    var q = Object.assign({}, extra || {});
+    if (id) {
+      var pwd = getSavedPwd(id);
+      if (pwd) q.pwd = pwd;
+    }
+    return identityQuery(q);
+  }
+
   function escapeHtml(s) {
     return String(s || "")
       .replace(/&/g, "&amp;")
@@ -62,6 +87,9 @@
         meta = "最近提交 " + escapeHtml(s.submittedAt);
       } else if (s.deadline) {
         meta = "截止 " + escapeHtml(String(s.deadline).replace("T", " "));
+      }
+      if (s.mode === "distribute" && s.needPassword) {
+        meta += (meta ? " · " : "") + "需密码";
       }
       if (s.expired) {
         meta += (meta ? " · " : "") + "已截止";
@@ -111,6 +139,50 @@
     if (!s || !box) return;
 
     var html = "";
+    if (s.mode === "distribute" && s.needPassword && !getSavedPwd(id)) {
+      html =
+        '<div class="block pwd-gate">' +
+        "<h3>访问密码</h3>" +
+        '<p class="meta">老师为该资料设置了密码，输入后才能查看下载</p>' +
+        '<label class="field"><span>密码</span>' +
+        '<input class="access-pwd" type="password" autocomplete="off" placeholder="请输入访问密码"></label>' +
+        '<button type="button" class="btn block unlock">打开资料</button>' +
+        '<p class="meta pwd-err" hidden></p></div>';
+      box.innerHTML = html;
+      var unlock = box.querySelector(".unlock");
+      var inp = box.querySelector(".access-pwd");
+      var err = box.querySelector(".pwd-err");
+      function tryUnlock() {
+        var pwd = (inp && inp.value.trim()) || "";
+        if (!pwd) {
+          if (err) {
+            err.textContent = "请输入密码";
+            err.hidden = false;
+          }
+          return;
+        }
+        savePwd(id, pwd);
+        NP.api("/pass/public/files?" + identityQueryWithPwd(id, { id: id }))
+          .then(function () {
+            fillBody(id);
+          })
+          .catch(function (e) {
+            savePwd(id, "");
+            if (err) {
+              err.textContent = e.message || "密码错误";
+              err.hidden = false;
+            }
+          });
+      }
+      if (unlock) unlock.onclick = tryUnlock;
+      if (inp) {
+        inp.onkeydown = function (e) {
+          if (e.key === "Enter") tryUnlock();
+        };
+      }
+      return;
+    }
+
     if (s.mode === "distribute") {
       html += '<div class="block"><ul class="list flist"><li><div class="meta">加载中</div></li></ul></div>';
     } else {
@@ -130,6 +202,7 @@
           '<div class="block"><h3>上传</h3>' +
           '<input type="file" class="file" multiple style="display:none">' +
           '<button type="button" class="btn block collect pick">选择文件</button>' +
+          '<div class="up-progress" hidden><div class="up-bar"></div></div>' +
           '<p class="meta uphint"></p></div>';
       } else {
         html += '<div class="block"><p class="meta" style="color:var(--danger)">已截止</p></div>';
@@ -184,11 +257,24 @@
     }
   }
 
+  function downloadMany(files) {
+    if (!files || !files.length) return;
+    NP.toast("开始下载 " + files.length + " 个文件…");
+    var i = 0;
+    function next() {
+      if (i >= files.length) return;
+      var f = files[i++];
+      NP.downloadFile(f.url, f.name, f.size || 0);
+      setTimeout(next, 450);
+    }
+    next();
+  }
+
   async function loadFiles(id, box, s) {
     var list = box.querySelector(".flist");
     if (!list) return;
     try {
-      var data = await NP.api("/pass/public/files?" + identityQuery({ id: id }));
+      var data = await NP.api("/pass/public/files?" + identityQueryWithPwd(id, { id: id }));
       var items = [];
       (data.materials || []).forEach(function (it) {
         items.push(it);
@@ -200,8 +286,16 @@
       }
       if (!items.length) {
         list.innerHTML = '<li><div class="meta">暂无文件</div></li>';
+        var oldBar = box.querySelector(".batch-bar");
+        if (oldBar) oldBar.remove();
         return;
       }
+      var canBatch =
+        s.mode === "distribute" &&
+        items.filter(function (it) {
+          return it.kind === "material" && it.canDownload;
+        }).length > 1;
+
       list.innerHTML = items
         .map(function (it) {
           var meta = [];
@@ -211,10 +305,23 @@
           }
           meta.push(it.sizeText || "");
           var action = "";
+          var dlUrl =
+            "/pass/public/download?" + identityQueryWithPwd(id, { id: id, f: it.path });
+          var check = "";
           if (it.kind === "material" && it.canDownload) {
+            if (canBatch) {
+              check =
+                '<label class="file-check"><input type="checkbox" class="fcheck" data-url="' +
+                escapeAttr(dlUrl) +
+                '" data-name="' +
+                escapeAttr(it.name) +
+                '" data-size="' +
+                (it.size || 0) +
+                '"></label>';
+            }
             action =
-              '<button type="button" class="btn ghost getfile" data-url="/pass/public/download?' +
-              identityQuery({ id: id, f: it.path }) +
+              '<button type="button" class="btn ghost getfile" data-url="' +
+              escapeAttr(dlUrl) +
               '" data-name="' +
               escapeAttr(it.name) +
               '" data-size="' +
@@ -231,8 +338,8 @@
               '">删除</button></div>';
           } else if (it.canDownload) {
             action =
-              '<button type="button" class="btn ghost getfile" data-url="/pass/public/download?' +
-              identityQuery({ id: id, f: it.path }) +
+              '<button type="button" class="btn ghost getfile" data-url="' +
+              escapeAttr(dlUrl) +
               '" data-name="' +
               escapeAttr(it.name) +
               '" data-size="' +
@@ -242,7 +349,9 @@
             action = '<span class="meta">—</span>';
           }
           return (
-            "<li><div><div class=\"title\">" +
+            "<li>" +
+            check +
+            '<div class="file-main"><div class="title">' +
             escapeHtml(it.name) +
             '</div><div class="meta">' +
             meta.join(" · ") +
@@ -252,6 +361,59 @@
           );
         })
         .join("");
+
+      var bar = box.querySelector(".batch-bar");
+      if (canBatch) {
+        if (!bar) {
+          bar = document.createElement("div");
+          bar.className = "batch-bar";
+          list.parentNode.insertBefore(bar, list);
+        }
+        bar.innerHTML =
+          '<label class="batch-all"><input type="checkbox" class="check-all"> 全选</label>' +
+          '<button type="button" class="btn send batch-dl" disabled>一键下载</button>';
+        var checkAll = bar.querySelector(".check-all");
+        var batchBtn = bar.querySelector(".batch-dl");
+        function selectedFiles() {
+          var out = [];
+          list.querySelectorAll(".fcheck:checked").forEach(function (cb) {
+            out.push({
+              url: cb.dataset.url,
+              name: cb.dataset.name,
+              size: Number(cb.dataset.size) || 0,
+            });
+          });
+          return out;
+        }
+        function syncBatch() {
+          var n = selectedFiles().length;
+          var all = list.querySelectorAll(".fcheck");
+          batchBtn.disabled = n === 0;
+          batchBtn.textContent = n ? "一键下载（" + n + "）" : "一键下载";
+          if (checkAll) {
+            checkAll.checked = all.length > 0 && n === all.length;
+            checkAll.indeterminate = n > 0 && n < all.length;
+          }
+        }
+        if (checkAll) {
+          checkAll.onchange = function () {
+            list.querySelectorAll(".fcheck").forEach(function (cb) {
+              cb.checked = checkAll.checked;
+            });
+            syncBatch();
+          };
+        }
+        list.querySelectorAll(".fcheck").forEach(function (cb) {
+          cb.onchange = syncBatch;
+        });
+        batchBtn.onclick = function () {
+          downloadMany(selectedFiles());
+        };
+        syncBatch();
+      } else if (bar) {
+        bar.remove();
+      }
+
       list.querySelectorAll(".getfile").forEach(function (btn) {
         btn.onclick = function () {
           NP.toast("开始下载…");
@@ -269,6 +431,11 @@
         };
       });
     } catch (e) {
+      if (s.mode === "distribute" && s.needPassword) {
+        savePwd(id, "");
+        fillBody(id);
+        return;
+      }
       list.innerHTML = '<li><div class="meta">' + escapeHtml(e.message) + "</div></li>";
     }
   }
@@ -286,7 +453,11 @@
     }
     var hint = box.querySelector(".uphint");
     var pickBtn = box.querySelector(".pick");
+    var prog = box.querySelector(".up-progress");
+    var bar = box.querySelector(".up-bar");
     if (pickBtn) pickBtn.disabled = true;
+    if (prog) prog.hidden = false;
+    var okCount = 0;
     for (var i = 0; i < fileList.length; i++) {
       var f = fileList[i];
       try {
@@ -299,22 +470,45 @@
             studentName: p.studentName,
             anonId: p.anonId,
           });
+        if (hint) {
+          hint.textContent =
+            "正在上传 " + (i + 1) + "/" + fileList.length + "：" + f.name + "（请勿关闭）";
+        }
+        if (bar) bar.style.width = "0%";
         await NP.uploadFile(url, f, function (loaded, total) {
-          if (!hint) return;
           var pct = total ? Math.floor((loaded / total) * 100) : 0;
-          hint.textContent = f.name + " " + pct + "%";
+          if (bar) bar.style.width = pct + "%";
+          if (hint) {
+            hint.textContent =
+              "正在上传 " +
+              (i + 1) +
+              "/" +
+              fileList.length +
+              "：" +
+              f.name +
+              " " +
+              pct +
+              "%";
+          }
         });
+        okCount++;
+        if (bar) bar.style.width = "100%";
       } catch (e) {
-        if (hint) hint.textContent = "";
+        if (hint) hint.textContent = "失败：" + (e.message || "上传失败") + "（未成功的不会计入）";
         if (pickBtn) pickBtn.disabled = false;
-        NP.toast(e.message);
+        NP.toast(e.message || "上传失败");
+        await refresh({ toast: false, force: true });
+        if (state.openId === id) {
+          var nb = document.getElementById("body-" + id);
+          var ns = findSession(id);
+          if (nb && ns) loadFiles(id, nb, ns);
+        }
         return;
       }
     }
-    if (hint) hint.textContent = "完成";
+    if (hint) hint.textContent = "全部上传成功（" + okCount + " 个）";
     if (pickBtn) pickBtn.disabled = false;
-    NP.toast("已提交");
-    // 已提交：自动折叠，刷新状态（灰 + 日期）
+    NP.toast("上传成功");
     state.openId = "";
     await refresh({ toast: false, force: true });
   }
@@ -365,21 +559,14 @@
   }
 
   async function boot() {
-    var updBtn = $("checkUpdateBtn");
-    if (updBtn) {
-      updBtn.onclick = function () {
-        NP.checkUpdate({ manual: true });
-      };
-    }
-    await NP.checkUpdate({ manual: false });
-    if (document.documentElement.classList.contains("update-locked")) return;
-
     var btn = $("studentRefresh");
     if (btn) {
       btn.onclick = function () {
         refresh({ toast: true, force: true });
       };
     }
+    // 秒开：先拉任务，更新检查放后台，不挡首屏
+    NP.checkUpdate({ manual: false }).catch(function () {});
     try {
       await refresh({ force: true });
       if (!state.sessions.length) {

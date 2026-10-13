@@ -10,38 +10,26 @@ import (
 	"strings"
 )
 
-// commands 执行程序
 var commands = map[string]string{
-	"windows": `cmd /c start `,
-	"darwin":  "open ",
-	"linux":   "xdg-open ", //eog -w
+	"darwin": "open",
+	"linux":  "xdg-open",
 }
 
-// divisions 路径分隔符
-var divisions = map[string]string{
-	"windows": "\\",
-	"darwin":  "/",
-	"linux":   "/",
-}
-
-// Open 打开浏览器
+// Open 打开浏览器或本地路径
 func Open(uri string) error {
-	//runtime.GOOS
+	return Reveal(uri)
+}
+
+// Reveal 打开本地路径（非 Windows）
+func Reveal(uri string) error {
+	uri = strings.TrimSpace(uri)
 	run, ok := commands[runtime.GOOS]
 	if !ok {
 		log.Printf("don't know how to open things on %s platform", runtime.GOOS)
+		return nil
 	}
-	//uri divisions
-	div := divisions[runtime.GOOS]
-	uri = strings.ReplaceAll(uri, "\\", div)
-	uri = strings.ReplaceAll(uri, "/", div)
-	//exec.Command
-	run = run + uri
-	cmds := strings.Split(run, " ")
-	cmd := exec.Command(cmds[0], cmds[1:]...)
-	//cmd.Start
-	log.Println("[CommandAs]", cmds)
-	//windows cmd不出现黑框
-	//cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	uri = strings.ReplaceAll(uri, "\\", "/")
+	cmd := exec.Command(run, uri)
+	log.Println("[CommandAs]", run, uri)
 	return cmd.Start()
 }

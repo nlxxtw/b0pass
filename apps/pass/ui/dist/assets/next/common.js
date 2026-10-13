@@ -114,7 +114,7 @@
     return Promise.resolve();
   }
 
-  // Safari 大文件：用 XHR + 显式文件名，避免 fetch FormData 偶发失败
+  // 与原版 layui 上传一致：multipart 字段名 file + 流式大文件接口；附带 X-File-Size 供服务端校验
   function uploadFile(url, file, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
@@ -122,6 +122,9 @@
       xhr.timeout = 0;
       var token = getToken();
       if (token) xhr.setRequestHeader("token", token);
+      if (file && typeof file.size === "number") {
+        xhr.setRequestHeader("X-File-Size", String(file.size));
+      }
       xhr.onload = function () {
         var data;
         try {
@@ -146,6 +149,9 @@
       };
       xhr.ontimeout = function () {
         reject(new Error("上传超时"));
+      };
+      xhr.onabort = function () {
+        reject(new Error("上传已取消"));
       };
       if (xhr.upload && typeof onProgress === "function") {
         xhr.upload.onprogress = function (ev) {

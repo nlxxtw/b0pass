@@ -35,6 +35,7 @@ type Session struct {
 	CanSeeOthers         bool   `json:"canSeeOthers"`
 	CanDownloadOthers    bool   `json:"canDownloadOthers"`
 	CanDownloadMaterials bool   `json:"canDownloadMaterials"`
+	AccessPassword       string `json:"accessPassword,omitempty"` // 发资料可选访问密码；空=不设
 	Deadline             string `json:"deadline,omitempty"`
 	CreatedAt            string `json:"createdAt"`
 }
@@ -159,7 +160,7 @@ func (s *Store) saveIndex(idx *Index) error {
 	return os.WriteFile(s.indexPath(), b, 0644)
 }
 
-func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, canSeeOthers, canDownloadOthers, canDownloadMaterials bool, deadline string) (*Session, error) {
+func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, canSeeOthers, canDownloadOthers, canDownloadMaterials bool, deadline, accessPassword string) (*Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -199,6 +200,7 @@ func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, ca
 		}
 		sess.SharePath = sharePath
 		sess.Folder = ""
+		sess.AccessPassword = strings.TrimSpace(accessPassword)
 	} else {
 		sharePath = filepath.Clean(strings.TrimSpace(sharePath))
 		folderRaw := strings.TrimSpace(folder)
@@ -577,6 +579,25 @@ func (s *Store) relUnder(sess *Session, parts ...string) string {
 	return filepath.ToSlash(filepath.Join(all...))
 }
 
+// NeedPassword 发资料是否设置了访问密码
+func (s *Store) NeedPassword(sess *Session) bool {
+	return sess != nil && sess.Mode == ModeDistribute && strings.TrimSpace(sess.AccessPassword) != ""
+}
+
+// CheckAccessPassword 校验发资料访问密码；未设密码直接通过
+func (s *Store) CheckAccessPassword(sess *Session, pwd string) error {
+	if !s.NeedPassword(sess) {
+		return nil
+	}
+	if strings.TrimSpace(pwd) == "" {
+		return errors.New("请输入访问密码")
+	}
+	if strings.TrimSpace(pwd) != strings.TrimSpace(sess.AccessPassword) {
+		return errors.New("访问密码错误")
+	}
+	return nil
+}
+
 func (s *Store) IsPastDeadline(sess *Session) bool {
 	if sess == nil || sess.Deadline == "" {
 		return false
@@ -621,6 +642,9 @@ func (s *Store) ListMaterials(sess *Session) ([]FileItem, error) {
 	out := []FileItem{}
 	for _, e := range entries {
 		if e.IsDir() || strings.HasPrefix(e.Name(), ".") || strings.HasPrefix(e.Name(), "_") {
+			continue
+		}
+		if strings.HasSuffix(e.Name(), ".npuploading") {
 			continue
 		}
 		info, err := e.Info()
@@ -890,6 +914,10 @@ func (s *Store) ListSubmissions(sess *Session, studentID, studentName, anonID st
 		}
 		for _, f := range files {
 			if f.IsDir() || f.Name() == "_submit.json" || strings.HasPrefix(f.Name(), ".") {
+				continue
+			}
+			// 上传未完成的临时文件不进列表（避免半截/0B 被当成已提交）
+			if strings.HasSuffix(f.Name(), ".npuploading") {
 				continue
 			}
 			info, err := f.Info()

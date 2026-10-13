@@ -200,17 +200,57 @@ func FileUpload(c *gin.Context) {
 	}
 }
 
+const uploadTmpSuffix = ".npuploading"
+
+// finalizeUpload 临时文件改名为正式文件。
+// 若带 X-File-Size 仅做校验日志；尺寸不符时保留文件并报错，避免「闪一下被删光」。
+func finalizeUpload(tmp, final string, c *gin.Context) bool {
+	if err := os.Rename(tmp, final); err != nil {
+		_ = os.Remove(final)
+		if err2 := os.Rename(tmp, final); err2 != nil {
+			_ = os.Remove(tmp)
+			engine.ERR("保存文件失败: "+err2.Error(), c)
+			return false
+		}
+	}
+	if expect := strings.TrimSpace(c.GetHeader("X-File-Size")); expect != "" {
+		st, err := os.Stat(final)
+		if err != nil {
+			engine.ERR("上传失败: 无法读取文件", c)
+			return false
+		}
+		if strconv.FormatInt(st.Size(), 10) != expect {
+			log.Printf("upload size mismatch: file=%s got=%d want=%s (kept on disk)\n", final, st.Size(), expect)
+			engine.ERR(fmt.Sprintf("上传不完整（已传 %d 字节，期望 %s），请重新上传", st.Size(), expect), c)
+			return false
+		}
+	}
+	return true
+}
+
 // FileUploadTiny 小文件上传
 func FileUploadTiny(RootPath string, c *gin.Context) {
 	log.Println("FileUploadTiny:::", RootPath)
-	//上传文件
-	file, _ := c.FormFile("file")
-	c.SaveUploadedFile(file, RootPath+file.Filename)
-	//上传成功
+	file, err := c.FormFile("file")
+	if err != nil {
+		engine.ERR("请先选择文件", c)
+		return
+	}
+	final := cleanPathJoin(RootPath, file.Filename)
+	tmp := final + uploadTmpSuffix
+	_ = os.Remove(tmp)
+	if err := c.SaveUploadedFile(file, tmp); err != nil {
+		_ = os.Remove(tmp)
+		engine.ERR("上传失败: "+err.Error(), c)
+		return
+	}
+	if !finalizeUpload(tmp, final, c) {
+		return
+	}
 	engine.OK("上传成功", "", c)
 }
 
-// FileUploadBig 大文件上传
+// FileUploadBig 大文件上传（沿用原项目 stream 流式解析，先写临时文件再改名）
 func FileUploadBig(RootPath string, c *gin.Context) {
 	log.Println("FileUploadBig:::", RootPath)
 	content_type_, has_key := c.Request.Header["Content-Type"]
@@ -229,8 +269,8 @@ func FileUploadBig(RootPath string, c *gin.Context) {
 	log.Printf("file boundary: [%s]\n", boundary)
 	read_data := make([]byte, 1024*12)
 	var read_total int = 0
+	var lastFinal string
 	for {
-		//解析文件头信息
 		file_header, file_data, err := stream.ParseFromHead(
 			read_data, read_total,
 			append(boundary, []byte("\r\n")...), c.Request.Body,
@@ -239,32 +279,40 @@ func FileUploadBig(RootPath string, c *gin.Context) {
 			engine.ERR("parse from fail: "+err.Error(), c)
 			return
 		}
-		//创建保存文件
 		fn := cleanPathJoin(RootPath, file_header.FileName)
-		log.Printf("save file: [%s]\n", fn)
-		f, err := os.Create(fn)
+		tmp := fn + uploadTmpSuffix
+		log.Printf("save file: [%s] via [%s]\n", fn, tmp)
+		_ = os.Remove(tmp)
+		f, err := os.Create(tmp)
 		if err != nil {
 			engine.ERR("create file fail: "+err.Error(), c)
 			return
 		}
-		f.Write(file_data)
+		if _, err := f.Write(file_data); err != nil {
+			f.Close()
+			_ = os.Remove(tmp)
+			engine.ERR("write file fail: "+err.Error(), c)
+			return
+		}
 		file_data = nil
 
-		//搜索boundary
 		temp_data, reach_end, err := stream.ReadToBoundary(boundary, c.Request.Body, f)
 		f.Close()
 		if err != nil {
+			_ = os.Remove(tmp)
 			engine.ERR("search boundary fail: "+err.Error(), c)
 			return
 		}
+		if !finalizeUpload(tmp, fn, c) {
+			return
+		}
+		lastFinal = fn
 		if reach_end {
 			break
-		} else {
-			copy(read_data[0:], temp_data)
-			read_total = len(temp_data)
-			continue
 		}
+		copy(read_data[0:], temp_data)
+		read_total = len(temp_data)
 	}
-	//上传成功
+	_ = lastFinal
 	engine.OK("上传成功", "", c)
 }

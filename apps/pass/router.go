@@ -95,6 +95,8 @@ func routeApi() {
 	POSTX("/session/delete", "{id}", "删除活动(rw)", SessionDelete)
 	POSTX("/session/material-upload", "{id}", "上传资料(rw)", SessionMaterialUpload)
 	POSTX("/session/pick-folder", "{}", "本机选目录(rw)", SessionPickFolder)
+	POSTX("/session/capture-drop", "{}", "本机拖放识别路径(rw)", SessionCaptureDrop)
+	POSTX("/session/resolve-path", "{path}", "校验本机路径(rw)", SessionResolvePath)
 	POSTX("/session/set-folder", "{id,folder}", "修改活动目录(rw)", SessionSetFolder)
 	POSTX("/session/reveal", "{id}", "本机打开文件夹(rw)", SessionReveal)
 	POSTX("/session/delete-submission", "{id,f}", "删除学生作业(rw)", SessionDeleteSubmission)
