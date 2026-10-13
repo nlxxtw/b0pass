@@ -1,0 +1,144 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (e.g. v2.0.6)"
+        required: true
+        default: "v2.0.6"
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cgo: "1"
+            artifact: b0pass-win
+            binary: b0pass.exe
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cgo: "0"
+            artifact: b0pass-linux
+            binary: b0pass
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            cgo: "0"
+            artifact: b0pass-mac
+            binary: b0pass
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install MinGW (Windows CGO)
+        if: matrix.goos == 'windows'
+        shell: bash
+        run: |
+          choco install mingw -y --no-progress
+          echo "C:\\ProgramData\\mingw64\\mingw64\\bin" >> "$GITHUB_PATH"
+          echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        working-directory: main
+        env:
+          CGO_ENABLED: ${{ matrix.cgo }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="../zdoc/${{ matrix.artifact }}/${{ matrix.binary }}"
+          go build -trimpath -ldflags="-s -w" -o "$OUT" .
+          ls -lh "$OUT"
+
+      - name: Package zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "zdoc/${{ matrix.artifact }}"
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            7z a -tzip "../../${{ matrix.artifact }}.zip" .
+          else
+            zip -r "../../${{ matrix.artifact }}.zip" .
+          fi
+          ls -lh "../../${{ matrix.artifact }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.zip
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List packages
+        run: ls -lah dist
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 百灵快传（B0Pass） ${{ steps.ver.outputs.tag }}
+          body: |
+            基于 `master`（含上游 2.0.6 改动）由 GitHub Actions 自动编译发布。
+
+            ### 下载
+            - `b0pass-win.zip` — Windows
+            - `b0pass-linux.zip` — Linux
+            - `b0pass-mac.zip` — macOS
+
+            ### 说明
+            - Windows 启用 CGO（支持键盘/鼠标控制）
+            - Linux / macOS 为无 CGO 构建
+            - 源码：https://github.com/${{ github.repository }}
+          files: dist/*.zip
+          draft: false
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
