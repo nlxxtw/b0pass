@@ -47,6 +47,7 @@ func init() {
 func run() {
 	engine.Print(aurora.Green("App pass loaded"), aurora.BrightCyan(config))
 	engine.Gin.Use(engine.CorsMiddleware())
+	initSessionStore()
 	routeStatic(config.Live)
 	routeApi()
 	routeWs()

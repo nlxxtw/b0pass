@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag (e.g. v2.0.6)"
+        description: "Release tag (e.g. v2.1.0)"
         required: true
-        default: "v2.0.6"
+        default: "v2.1.0"
       prerelease:
         description: "Mark as pre-release"
         required: false
@@ -31,20 +31,20 @@ jobs:
             goos: windows
             goarch: amd64
             cgo: "1"
-            artifact: b0pass-win
-            binary: b0pass.exe
+            artifact: nextpass-win
+            binary: nextpass.exe
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             cgo: "0"
-            artifact: b0pass-linux
-            binary: b0pass
+            artifact: nextpass-linux
+            binary: nextpass
           - os: macos-latest
             goos: darwin
             goarch: amd64
             cgo: "0"
-            artifact: b0pass-mac
-            binary: b0pass
+            artifact: nextpass-mac
+            binary: nextpass
 
     steps:
       - name: Checkout
@@ -53,46 +53,90 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.24.x"
 
       - name: Install MinGW (Windows CGO)
         if: matrix.goos == 'windows'
-        shell: bash
+        shell: pwsh
         run: |
           choco install mingw -y --no-progress
-          echo "C:\\ProgramData\\mingw64\\mingw64\\bin" >> "$GITHUB_PATH"
-          echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw64\\bin" >> "$GITHUB_PATH"
+
+      - name: Hide Windows .syso on non-Windows
+        if: matrix.goos != 'windows'
+        shell: bash
+        run: |
+          if [ -f main/main.syso ]; then mv main/main.syso main/main.syso.bak; fi
 
       - name: Build
         working-directory: main
+        shell: bash
         env:
           CGO_ENABLED: ${{ matrix.cgo }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        shell: bash
         run: |
           set -euo pipefail
-          OUT="../zdoc/${{ matrix.artifact }}/${{ matrix.binary }}"
-          go build -trimpath -ldflags="-s -w" -o "$OUT" .
-          ls -lh "$OUT"
-
-      - name: Package zip
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "zdoc/${{ matrix.artifact }}"
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
-            7z a -tzip "../../${{ matrix.artifact }}.zip" .
-          else
-            zip -r "../../${{ matrix.artifact }}.zip" .
+          mkdir -p "../dist/${{ matrix.artifact }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            for d in \
+              "/c/ProgramData/mingw64/mingw64/bin" \
+              "/c/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin" \
+              "/c/tools/mingw64/bin" \
+              "/c/mingw64/bin"
+            do
+              [ -d "$d" ] && export PATH="$d:$PATH"
+            done
+            gcc --version
           fi
-          ls -lh "../../${{ matrix.artifact }}.zip"
+          go build -trimpath -ldflags="-s -w" -o "../dist/${{ matrix.artifact }}/${{ matrix.binary }}" .
+          ls -lh "../dist/${{ matrix.artifact }}/${{ matrix.binary }}"
+
+      - name: Stage package files
+        shell: bash
+        run: |
+          set -euo pipefail
+          PKG="dist/${{ matrix.artifact }}"
+          printf '%s\n' \
+            '[gateway]' \
+            'ListenAddr = ":8000"' \
+            'Domain = ""' \
+            '' \
+            '[pass]' \
+            'Path = "files"' \
+            'CodeReadWrite = "admin"' \
+            'CodeReadOnly = ""' \
+            'LockUploadDir = ""' \
+            > "$PKG/config.ini"
+          printf '%s\n' \
+            '# NextPass' \
+            '' \
+            '1. 运行 nextpass / nextpass.exe' \
+            '2. 学生打开 http://老师IP:8000/' \
+            '3. 老师打开 http://老师IP:8000/admin （默认口令 admin）' \
+            > "$PKG/readme.md"
+          if [ "${{ matrix.goos }}" != "windows" ]; then
+            chmod +x "$PKG/${{ matrix.binary }}"
+          fi
+          if [ "${{ matrix.goos }}" = "windows" ] && [ -f "zdoc/b0pass-win/zlib1.dll" ]; then
+            cp "zdoc/b0pass-win/zlib1.dll" "$PKG/zlib1.dll"
+          fi
+
+      - name: Zip artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            7z a -tzip "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
+          else
+            zip -r "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}.zip
+          path: dist/${{ matrix.artifact }}.zip
           if-no-files-found: error
 
   release:
@@ -104,41 +148,49 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            echo "tag=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
           else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            V="${GITHUB_REF_NAME}"
           fi
+          case "$V" in
+            v*) ;;
+            *) V="v$V" ;;
+          esac
+          echo "tag=$V" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          path: release-assets
 
-      - name: List packages
-        run: ls -lah dist
+      - name: Flatten assets
+        shell: bash
+        run: |
+          mkdir -p out
+          find release-assets -type f -name '*.zip' -exec cp {} out/ \;
+          ls -lah out
 
-      - name: Create or update release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: 百灵快传（B0Pass） ${{ steps.ver.outputs.tag }}
-          body: |
-            基于 `master`（含上游 2.0.6 改动）由 GitHub Actions 自动编译发布。
-
-            ### 下载
-            - `b0pass-win.zip` — Windows
-            - `b0pass-linux.zip` — Linux
-            - `b0pass-mac.zip` — macOS
-
-            ### 说明
-            - Windows 启用 CGO（支持键盘/鼠标控制）
-            - Linux / macOS 为无 CGO 构建
-            - 源码：https://github.com/${{ github.repository }}
-          files: dist/*.zip
-          draft: false
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          name: NextPass ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
+          body: |
+            NextPass 局域网作业助手（基于 b0pass 改造）
+
+            ## 下载
+            - **Windows**: `nextpass-win.zip`
+            - **Linux**: `nextpass-linux.zip`
+            - **macOS**: `nextpass-mac.zip`
+
+            ## 使用
+            1. 解压运行
+            2. **学生**：`http://老师IP:8000/`
+            3. **老师**：`http://老师IP:8000/admin`（默认口令 `admin`，见 config.ini）
+          files: |
+            out/*.zip
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

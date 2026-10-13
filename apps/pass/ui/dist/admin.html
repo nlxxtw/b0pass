@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>NextPass 老师端</title>
+  <link rel="stylesheet" href="/assets/next/app.css">
+</head>
+<body>
+  <div class="app">
+    <div class="brand">
+      <div>
+        <h1>NextPass</h1>
+        <div class="sub">老师管理端</div>
+      </div>
+      <div class="row">
+        <button class="btn secondary" id="openStudent">预览学生页</button>
+        <button class="btn secondary" id="logoutBtn">退出</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>学生访问（投屏这个即可）</h2>
+      <div class="linkbox" id="rootLink">http://</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="copyBtn">复制链接</button>
+      </div>
+      <div class="qr" id="qr"></div>
+      <p class="muted" style="text-align:center;margin:10px 0 0">学生只需打开上述地址，无需额外路径</p>
+    </div>
+
+    <div class="card">
+      <h2>创建活动</h2>
+      <div class="seg">
+        <button type="button" class="active" data-mode="collect">收作业</button>
+        <button type="button" data-mode="distribute">发资料</button>
+      </div>
+      <label class="field"><span>活动名称</span>
+        <input id="name" type="text" placeholder="例如：第3章实验报告">
+      </label>
+      <label class="field"><span>截止时间（可选）</span>
+        <input id="deadline" type="datetime-local">
+      </label>
+      <div id="collectOpts">
+        <label class="check"><input type="checkbox" id="requireIdentity" checked> 强制填写学号和姓名</label>
+        <label class="check"><input type="checkbox" id="canSeeOthers"> 学生可查看他人作业</label>
+        <label class="check"><input type="checkbox" id="canDownloadOthers" disabled> 学生可下载他人作业</label>
+      </div>
+      <label class="check"><input type="checkbox" id="canDownloadMaterials" checked> 学生可下载老师资料</label>
+      <button class="btn block" id="createBtn" style="margin-top:8px">创建并发布到学生首页</button>
+    </div>
+
+    <div class="card">
+      <h2>上传老师资料</h2>
+      <p class="muted">文件会进入当前已发布活动的资料区</p>
+      <input type="file" id="matFile" multiple style="display:none">
+      <button class="btn secondary block" id="matBtn">选择文件上传</button>
+    </div>
+
+    <div class="card">
+      <h2>活动列表</h2>
+      <ul class="list" id="sessList"></ul>
+    </div>
+
+    <div class="card" id="statsCard" style="display:none">
+      <h2 id="statsTitle">提交统计</h2>
+      <p class="muted" id="statsSummary"></p>
+      <div style="overflow:auto">
+        <table class="table">
+          <thead>
+            <tr><th>学号</th><th>姓名</th><th>文件</th><th>大小</th><th>时间</th></tr>
+          </thead>
+          <tbody id="statsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="/assets/lib/qrcode.min.js"></script>
+  <script src="/assets/next/common.js"></script>
+  <script src="/assets/next/admin.js"></script>
+</body>
+</html>

@@ -21,7 +21,7 @@ func main() {
 	* 检查配置
 	 */
 	configFile := "config.ini"
-	defaultConfig := "[gateway]\nListenAddr = \":8888\"\nDomain=\"\"\n\n[pass]\nPath = \"files\"\n"
+	defaultConfig := "[gateway]\nListenAddr = \":8000\"\nDomain=\"\"\nLive = false\n\n[pass]\nPath = \"files\"\nCodeReadWrite = \"admin\"\nLive = false\n"
 	ok, _ := files.PathExists(configFile)
 	if !ok {
 		os.WriteFile(configFile, []byte(defaultConfig), 0666)
@@ -33,7 +33,7 @@ func main() {
 	go func() {
 		//Version
 		engine.Print(aurora.Black("--------------------------------------------"))
-		engine.Print(aurora.BgGreen(aurora.Black("          百灵快传主电脑端 B0Pass             ")))
+		engine.Print(aurora.BgGreen(aurora.Black("              NextPass 局域网作业助手              ")))
 		waitTime := 100000 * time.Microsecond
 		time.Sleep(waitTime)
 		//检查ListenAddr
@@ -53,12 +53,11 @@ func main() {
 		}
 
 		engine.Print(aurora.BrightBlue("端口配置为：" + engine.Addr))
-		engine.Print(aurora.BrightBlue("主电脑参数：" + serverUrl))
-		engine.Print(aurora.BrightBlue("访问主电脑： http://" + serverUrl))
-		engine.Print(aurora.BrightBlue("官网下载APP：  https://4bit.cn/p/b0pass"))
+		engine.Print(aurora.BrightBlue("学生访问： http://" + serverUrl + "/"))
+		engine.Print(aurora.BrightBlue("老师管理： http://" + serverUrl + "/admin"))
 		engine.Print(aurora.Green("需特别注意：本机【防火墙】设为：允许访问"))
 		engine.Print(aurora.Black("--------------------------------------------"))
-		cmd.Open("http://" + serverUrl)
+		cmd.Open("http://" + serverUrl + "/admin")
 	}()
 	time.Sleep(5000 * time.Microsecond)
 	engine.Run(configFile)
