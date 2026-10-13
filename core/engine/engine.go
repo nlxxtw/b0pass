@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -57,9 +58,31 @@ var (
 func init() {
 	//Gin初始化设置
 	gin.SetMode(gin.ReleaseMode)
-	Gin = gin.Default()
-	Gin.Use(gzip.Gzip(gzip.DefaultCompression))
+	Gin = gin.New()
+	// 轮询接口不打访问日志，避免控制台刷屏
+	Gin.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		SkipPaths: []string{
+			"/pass/public/sessions",
+			"/pass/public/files",
+			"/pass/public/update-check",
+			"/pass/public/version",
+			"/pass/session/list",
+			"/pass/session/stats",
+		},
+	}))
 	Gin.Use(gin.Recovery())
+	// 下载/静态大文件禁止 gzip：Safari 会存成名为 download，且 pptx 等再压缩极慢
+	gz := gzip.Gzip(gzip.DefaultCompression)
+	Gin.Use(func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if strings.HasPrefix(p, "/pass/public/download") ||
+			strings.HasPrefix(p, "/pass/file-download") ||
+			strings.HasPrefix(p, "/files") {
+			c.Next()
+			return
+		}
+		gz(c)
+	})
 	Gin.SetTrustedProxies(nil)
 }
 
@@ -83,21 +106,33 @@ func Run(configFile string) (err error) {
 	}
 	var cg map[string]interface{}
 	if _, err = toml.Decode(string(ConfigRaw), &cg); err == nil {
-		for name, config := range App {
+		// gateway.Run 内会阻塞在 Gin.Run，必须最后启动；
+		// Go map 遍历顺序随机，否则 pass 路由经常注册不上 → /admin 404。
+		start := func(name string, app *AppConfig) {
 			if cfg, ok := cg[name]; ok {
 				b, _ := json.Marshal(cfg)
-				if err = json.Unmarshal(b, config.Config); err != nil {
+				if err = json.Unmarshal(b, app.Config); err != nil {
 					log.Println(err)
-					continue
+					return
 				}
-			} else if config.Config != nil {
+			} else if app.Config != nil {
+				return
+			}
+			if app.Run != nil {
+				app.Run()
+			}
+		}
+		for name, app := range App {
+			if app.Type&APP_HOOK != 0 {
 				continue
 			}
-			if config.Run != nil {
-				//执行run函数
-				//time.Sleep(10000 * time.Microsecond)
-				config.Run() //go
+			start(name, app)
+		}
+		for name, app := range App {
+			if app.Type&APP_HOOK == 0 {
+				continue
 			}
+			start(name, app)
 		}
 	} else {
 		Print(aurora.Red("decode config file error:"), err)

@@ -5,6 +5,7 @@ import (
 	"embed"
 	"io/fs"
 	"path/filepath"
+	"strings"
 
 	"github.com/logrusorgru/aurora"
 )
@@ -45,8 +46,13 @@ func init() {
 
 // APP:RUN
 func run() {
+	// 教师端默认密码 admin（可在 config.ini [pass] CodeReadWrite 修改）
+	if strings.TrimSpace(config.CodeReadWrite) == "" {
+		config.CodeReadWrite = "admin"
+	}
 	engine.Print(aurora.Green("App pass loaded"), aurora.BrightCyan(config))
 	engine.Gin.Use(engine.CorsMiddleware())
+	initSessionStore()
 	routeStatic(config.Live)
 	routeApi()
 	routeWs()

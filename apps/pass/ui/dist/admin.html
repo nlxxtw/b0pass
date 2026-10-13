@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>NextPass 老师</title>
+  <link rel="stylesheet" href="/assets/next/app.css?v=24">
+</head>
+<body>
+  <div id="loginGate" class="login-gate">
+    <div class="card login-card">
+      <h1 class="logo">Next<em>Pass</em></h1>
+      <h2>教师登录</h2>
+      <p class="hint">默认密码 <code>admin</code>。修改密码：打开程序目录下的 <code>config.ini</code>，找到 <code>[pass]</code> 里的 <code>CodeReadWrite</code> 改掉即可。</p>
+      <p class="hint warn">请勿把教师密码告诉学生；学生只用首页扫码/链接交作业、下资料。</p>
+      <label class="field"><span>教师密码</span>
+        <input id="loginPwd" type="password" placeholder="请输入教师密码" autocomplete="current-password">
+      </label>
+      <button class="btn block" id="loginBtn" type="button">登录</button>
+      <p class="meta" id="loginErr" hidden></p>
+    </div>
+  </div>
+
+  <div class="app admin" id="adminApp" hidden>
+    <header class="top sticky">
+      <h1 class="logo">Next<em>Pass</em></h1>
+      <div class="top-actions">
+        <span class="ver-tag" id="appVersion"></span>
+        <button class="btn ghost" id="checkUpdateBtn" type="button">更新</button>
+        <button class="btn ghost" id="globalRefresh" type="button">刷新</button>
+        <button class="btn ghost" id="openStudent" type="button">学生页</button>
+        <button class="btn ghost" id="logoutBtn" type="button">退出</button>
+      </div>
+    </header>
+
+    <div class="board">
+      <section class="card share-card">
+        <h2>学生地址</h2>
+        <div class="row">
+          <div class="linkbox grow" id="rootLink"></div>
+          <button class="btn ghost" id="copyBtn" type="button">复制</button>
+        </div>
+        <div class="qr" id="qr"></div>
+      </section>
+
+      <section class="card create-card">
+        <h2>新建</h2>
+        <div class="seg" id="modeSeg">
+          <button type="button" class="active collect" data-mode="collect">收作业</button>
+          <button type="button" data-mode="distribute">发资料</button>
+        </div>
+        <label class="field"><span>名称</span>
+          <input id="name" type="text" placeholder="如：第3章实验" autocomplete="off">
+        </label>
+
+        <label class="field" id="collectFolderField"><span>作业存放位置</span>
+          <div class="row">
+            <input id="folder" class="grow" type="text" placeholder="如 20261013，或点选择任选磁盘目录" autocomplete="off">
+            <button class="btn ghost" id="pickFolderBtn" type="button">选择</button>
+          </div>
+        </label>
+
+        <label class="field" id="sharePathField" hidden><span>本地资料文件夹</span>
+          <div class="row">
+            <input id="sharePath" class="grow" type="text" placeholder="点击右侧选择本机文件夹" readonly>
+            <button class="btn ghost" id="pickShareBtn" type="button">选择</button>
+          </div>
+        </label>
+
+        <label class="field" id="deadlineField"><span>截止</span>
+          <input id="deadline" type="datetime-local">
+        </label>
+        <div id="collectOpts">
+          <label class="check"><input type="checkbox" id="requireIdentity" checked> 学号姓名必填</label>
+          <label class="check"><input type="checkbox" id="canSeeOthers"> 可见他人作业</label>
+          <label class="check"><input type="checkbox" id="canDownloadOthers" disabled> 可下载他人作业</label>
+        </div>
+        <button class="btn block collect" id="createBtn" type="button">创建收作业</button>
+      </section>
+    </div>
+
+    <section class="card list-card">
+      <div class="section-head">
+        <h2 id="listTitle">收作业列表</h2>
+        <button class="btn ghost" id="listRefresh" type="button">刷新</button>
+      </div>
+      <ul class="list" id="sessList"></ul>
+    </section>
+
+    <section class="card" id="statsCard" hidden>
+      <div class="stats-head">
+        <div>
+          <h2 id="statsTitle">详情</h2>
+          <p class="meta" id="statsSummary"></p>
+        </div>
+        <div class="top-actions">
+          <button class="btn ghost" id="statsRefresh" type="button">刷新</button>
+          <button class="btn ghost" id="statsClose" type="button">关闭</button>
+        </div>
+      </div>
+      <label class="field"><span id="statsPathLabel">目录</span>
+        <div class="row">
+          <input id="statsPath" class="grow" type="text" readonly onclick="this.select()">
+          <button class="btn ghost" id="statsOpenBtn" type="button">打开</button>
+          <button class="btn ghost" id="statsPickBtn" type="button">修改</button>
+        </div>
+      </label>
+      <div class="table-wrap">
+        <table class="table" id="statsTable">
+          <thead id="statsHead"></thead>
+          <tbody id="statsBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/assets/lib/qrcode.min.js"></script>
+  <script src="/assets/next/common.js?v=24"></script>
+  <script src="/assets/next/admin.js?v=24"></script>
+</body>
+</html>

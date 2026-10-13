@@ -31,7 +31,7 @@ func ReadIP(c *gin.Context) {
 	engine.OK("OK", ip, c)
 }
 
-// CmdOpen 使用命令行打开
+// CmdOpen 使用命令行打开（原 b0pass：主电脑 cmd.Open / start）
 func CmdOpen(c *gin.Context) {
 	RootPath := strings.ReplaceAll(config.Path, "\\", "/")
 	f := c.Query("f")
@@ -40,9 +40,14 @@ func CmdOpen(c *gin.Context) {
 	engine.Println(ext)
 	if ext == ".BAT" || ext == ".CMD" || ext == ".EXE" {
 		engine.ERR("该文件暂不支持打开", c)
-	} else {
-		cmd.Open(RootPath + f)
+		return
 	}
+	target := RootPath + f
+	if err := cmd.Open(target); err != nil {
+		engine.ERR("打开失败: "+err.Error(), c)
+		return
+	}
+	engine.OK("已在主电脑打开", gin.H{"opened": target}, c)
 }
 
 // CmdKey 主电脑键盘

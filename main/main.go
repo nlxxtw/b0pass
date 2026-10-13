@@ -21,7 +21,7 @@ func main() {
 	* 检查配置
 	 */
 	configFile := "config.ini"
-	defaultConfig := "[gateway]\nListenAddr = \":8888\"\nDomain=\"\"\n\n[pass]\nPath = \"files\"\n"
+	defaultConfig := "[gateway]\nListenAddr = \":8000\"\nDomain=\"\"\nLive = false\n\n[pass]\nPath = \"files\"\nCodeReadOnly = \"\"\nCodeReadWrite = \"admin\"\nLive = false\n"
 	ok, _ := files.PathExists(configFile)
 	if !ok {
 		os.WriteFile(configFile, []byte(defaultConfig), 0666)
@@ -31,36 +31,36 @@ func main() {
 	* 启动服务
 	 */
 	go func() {
-		//Version
+		// 等 gateway 写入 ListenAddr 后再弹浏览器，避免空端口
+		for i := 0; i < 50 && strings.TrimSpace(engine.Addr) == ""; i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
 		engine.Print(aurora.Black("--------------------------------------------"))
-		engine.Print(aurora.BgGreen(aurora.Black("          百灵快传主电脑端 B0Pass             ")))
-		waitTime := 100000 * time.Microsecond
-		time.Sleep(waitTime)
-		//检查ListenAddr
+		engine.Print(aurora.BgGreen(aurora.Black("              NextPass 局域网作业助手              ")))
 		ip := nets.GetOutBoundIP()
 		serverUrl := ""
 		if strings.Trim(engine.Domain, "") != "" {
 			serverUrl = engine.Domain
 		} else {
 			ports := strings.Split(engine.Addr, ":")
-			if len(ports) != 2 {
-				time.Sleep(waitTime)
+			if len(ports) == 2 {
+				if ports[0] != "" {
+					ip = ports[0]
+				}
+				serverUrl = ip + ":" + ports[1]
+			} else {
+				serverUrl = ip + engine.Addr
 			}
-			if ports[0] != "" {
-				ip = ports[0]
-			}
-			serverUrl = ip + ":" + ports[1]
 		}
 
 		engine.Print(aurora.BrightBlue("端口配置为：" + engine.Addr))
-		engine.Print(aurora.BrightBlue("主电脑参数：" + serverUrl))
-		engine.Print(aurora.BrightBlue("访问主电脑： http://" + serverUrl))
-		engine.Print(aurora.BrightBlue("官网下载APP：  https://4bit.cn/p/b0pass"))
+		engine.Print(aurora.BrightBlue("学生访问： http://" + serverUrl + "/"))
+		engine.Print(aurora.BrightBlue("老师管理： http://" + serverUrl + "/admin"))
 		engine.Print(aurora.Green("需特别注意：本机【防火墙】设为：允许访问"))
 		engine.Print(aurora.Black("--------------------------------------------"))
-		cmd.Open("http://" + serverUrl)
+		_ = cmd.Open("http://" + serverUrl + "/admin")
 	}()
-	time.Sleep(5000 * time.Microsecond)
+	time.Sleep(20 * time.Millisecond)
 	engine.Run(configFile)
 	select {}
 }

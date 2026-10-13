@@ -1,22 +1,27 @@
 name: Build and Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. v2.0.6)"
+        description: "Release tag (e.g. v2.1.0)"
         required: true
-        default: "v2.0.6"
+        default: "v2.1.0"
+      prerelease:
+        description: "Mark as pre-release"
+        required: false
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build ${{ matrix.goos }}
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,20 +31,20 @@ jobs:
             goos: windows
             goarch: amd64
             cgo: "1"
-            artifact: b0pass-win
-            binary: b0pass.exe
+            artifact: nextpass-win
+            binary: nextpass.exe
           - os: ubuntu-latest
             goos: linux
             goarch: amd64
             cgo: "0"
-            artifact: b0pass-linux
-            binary: b0pass
+            artifact: nextpass-linux
+            binary: nextpass
           - os: macos-latest
             goos: darwin
             goarch: amd64
             cgo: "0"
-            artifact: b0pass-mac
-            binary: b0pass
+            artifact: nextpass-mac
+            binary: nextpass
 
     steps:
       - name: Checkout
@@ -55,16 +60,24 @@ jobs:
         shell: pwsh
         run: |
           choco install mingw -y --no-progress
-          Get-ChildItem "C:\ProgramData\mingw64","C:\tools\mingw64","C:\mingw64" -ErrorAction SilentlyContinue |
-            ForEach-Object { Write-Host "found: $($_.FullName)" }
 
       - name: Hide Windows .syso on non-Windows
         if: matrix.goos != 'windows'
         shell: bash
         run: |
-          if [ -f main/main.syso ]; then
-            mv main/main.syso main/main.syso.bak
+          if [ -f main/main.syso ]; then mv main/main.syso main/main.syso.bak; fi
+
+      - name: Resolve version for ldflags
+        id: buildver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ github.event.inputs.version }}"
+          else
+            V="${GITHUB_REF_NAME}"
           fi
+          V="${V#v}"
+          echo "ver=$V" >> "$GITHUB_OUTPUT"
 
       - name: Build
         working-directory: main
@@ -85,47 +98,41 @@ jobs:
             do
               [ -d "$d" ] && export PATH="$d:$PATH"
             done
-            echo "PATH=$PATH"
             gcc --version
           fi
-          go build -trimpath -ldflags="-s -w" -o "../dist/${{ matrix.artifact }}/${{ matrix.binary }}" .
+          VER="${{ steps.buildver.outputs.ver }}"
+          LDFLAGS="-s -w -X b0go/apps/pass.AppVersion=${VER}"
+          go build -trimpath -ldflags="$LDFLAGS" -o "../dist/${{ matrix.artifact }}/${{ matrix.binary }}" .
+          ls -lh "../dist/${{ matrix.artifact }}/${{ matrix.binary }}"
 
       - name: Stage package files
         shell: bash
         run: |
           set -euo pipefail
           PKG="dist/${{ matrix.artifact }}"
-          mkdir -p "$PKG"
-
           printf '%s\n' \
             '[gateway]' \
-            'ListenAddr = ":8888"' \
+            'ListenAddr = ":8000"' \
             'Domain = ""' \
             '' \
             '[pass]' \
             'Path = "files"' \
+            'CodeReadWrite = "admin"' \
             'CodeReadOnly = ""' \
-            'CodeReadWrite = ""' \
             'LockUploadDir = ""' \
             > "$PKG/config.ini"
-
-          if [ -f "zdoc/${{ matrix.artifact }}/readme.md" ]; then
-            cp "zdoc/${{ matrix.artifact }}/readme.md" "$PKG/readme.md"
-          else
-            printf '# B0Pass\n\nRun the binary, then open the printed URL.\n' > "$PKG/readme.md"
+          printf '%s\n' \
+            '# NextPass' \
+            '' \
+            '1. 运行 nextpass / nextpass.exe' \
+            '2. 学生打开 http://老师IP:8000/' \
+            '3. 老师打开 http://老师IP:8000/admin （默认口令 admin）' \
+            > "$PKG/readme.md"
+          if [ "${{ matrix.goos }}" != "windows" ]; then
+            chmod +x "$PKG/${{ matrix.binary }}"
           fi
-
           if [ "${{ matrix.goos }}" = "windows" ] && [ -f "zdoc/b0pass-win/zlib1.dll" ]; then
             cp "zdoc/b0pass-win/zlib1.dll" "$PKG/zlib1.dll"
-          fi
-
-          if [ "${{ matrix.goos }}" = "linux" ] && [ -f "zdoc/b0pass-linux/start.sh" ]; then
-            cp "zdoc/b0pass-linux/start.sh" "$PKG/start.sh"
-            chmod +x "$PKG/start.sh" "$PKG/${{ matrix.binary }}"
-          fi
-
-          if [ "${{ matrix.goos }}" = "darwin" ]; then
-            chmod +x "$PKG/${{ matrix.binary }}"
           fi
 
       - name: Zip artifact
@@ -165,7 +172,6 @@ jobs:
             *) V="v$V" ;;
           esac
           echo "tag=$V" >> "$GITHUB_OUTPUT"
-          echo "Resolved tag: $V"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -175,7 +181,6 @@ jobs:
       - name: Flatten assets
         shell: bash
         run: |
-          set -euo pipefail
           mkdir -p out
           find release-assets -type f -name '*.zip' -exec cp {} out/ \;
           ls -lah out
@@ -184,22 +189,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: 百灵快传（B0Pass） ${{ steps.ver.outputs.tag }}
+          name: NextPass ${{ steps.ver.outputs.tag }}
           generate_release_notes: true
           body: |
-            基于 `master` 最新源码自动编译（含 2.0.4–2.0.6 未发版改动）。
+            NextPass 局域网作业助手（基于 b0pass 改造）
 
             ## 下载
-            - **Windows**: `b0pass-win.zip`
-            - **Linux**: `b0pass-linux.zip`
-            - **macOS**: `b0pass-mac.zip`
+            - **Windows**: `nextpass-win.zip`
+            - **Linux**: `nextpass-linux.zip`
+            - **macOS**: `nextpass-mac.zip`
 
             ## 使用
-            解压后运行可执行文件，浏览器打开终端提示的局域网地址即可。
-            可通过同目录 `config.ini` 修改端口、共享目录与读写口令。
-
-            > 本 Release 由 GitHub Actions 在 fork 仓库自动构建，非 upstream 官方包。
+            1. 解压运行
+            2. **学生**：`http://老师IP:8000/`
+            3. **老师**：`http://老师IP:8000/admin`（默认口令 `admin`，见 config.ini）
           files: |
             out/*.zip
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

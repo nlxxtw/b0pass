@@ -6,45 +6,26 @@ package cmd
 import (
 	"log"
 	"os/exec"
-	"runtime"
 	"strings"
 	"syscall"
 )
 
-// commands 执行程序
-var commands = map[string]string{
-	"windows": `cmd /c start `,
-	"darwin":  "open ",
-	"linux":   "xdg-open ", //eog -w
-}
-
-// divisions 路径分隔符
-var divisions = map[string]string{
-	"windows": "\\",
-	"darwin":  "/",
-	"linux":   "/",
-}
-
-// Open 打开浏览器
+// Open 打开浏览器（Windows）
+// 注意：http(s) URL 必须保持正斜杠，不能改成反斜杠，否则带路径（如 /admin）时无法弹出浏览器。
 func Open(uri string) error {
-	//runtime.GOOS
-	run, ok := commands[runtime.GOOS]
-	if !ok {
-		log.Printf("don't know how to open things on %s platform", runtime.GOOS)
+	uri = strings.TrimSpace(uri)
+	if uri == "" {
+		return nil
 	}
-	//uri divisions
-	div := divisions[runtime.GOOS]
-	uri = strings.ReplaceAll(uri, "\\", div)
-	uri = strings.ReplaceAll(uri, "/", div)
-	//exec.Command
-	//run = run + uri
-	cmds := strings.Split(run, " ")
-	cmds = append(cmds, uri)
-	//cmd := exec.Command(cmds[0], cmds[1:]...)
-	cmd := exec.Command(cmds[0], cmds[1:]...)
-	//cmd.Start
-	log.Println("[CommandAs]", run, uri)
-	//windows cmd不出现黑框
+
+	// 本地文件路径才需要反斜杠；网页地址保持原样
+	if !(strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")) {
+		uri = strings.ReplaceAll(uri, "/", "\\")
+	}
+
+	log.Println("[CommandAs] cmd /c start", uri)
+	// start 的第一个引号参数是窗口标题，必须留空，否则 URL 会被当成标题
+	cmd := exec.Command("cmd", "/c", "start", "", uri)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	return cmd.Start()
 }
