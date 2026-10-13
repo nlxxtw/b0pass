@@ -308,9 +308,10 @@
         await applySharePath(p);
         return;
       }
-      var data = await pickFolder(true);
-      if (data && (data.sharePath || data.abs)) {
-        $("sharePath").value = data.sharePath || data.abs;
+      var data = await pickFolder(true, "file");
+      if (data) {
+        var dp = data.source || data.sharePath || data.abs || "";
+        if (dp) $("sharePath").value = dp;
       }
     });
     if (input) {
@@ -544,10 +545,11 @@
       $("folder").value = data.abs || data.sharePath || data.folder || "";
     };
     async function applyPickedShare(data) {
-      if (!data || !(data.sharePath || data.abs)) return;
-      $("sharePath").value = data.sharePath || data.abs;
-      if (data.wasFile) NP.toast("已填入该文件所在文件夹");
-      else NP.toast("已填入文件夹路径");
+      if (!data) return;
+      var p = data.source || data.sharePath || data.abs || "";
+      if (!p) return;
+      $("sharePath").value = p;
+      NP.toast(data.wasFile ? "已选择文件" : "已选择文件夹");
     }
     $("pickShareFileBtn").onclick = async function () {
       await applyPickedShare(await pickFolder(true, "file"));

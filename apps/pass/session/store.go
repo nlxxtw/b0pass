@@ -113,11 +113,24 @@ func (s *Store) SessionDir(sess *Session) string {
 }
 
 func (s *Store) MaterialsDir(sess *Session) string {
-	// 仅发资料：SharePath 就是资料文件夹本身
+	// 发资料：SharePath 可为文件夹，或单个文件（此时返回其所在目录）
 	if sess != nil && sess.Mode == ModeDistribute && strings.TrimSpace(sess.SharePath) != "" {
-		return filepath.Clean(sess.SharePath)
+		p := filepath.Clean(sess.SharePath)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return filepath.Dir(p)
+		}
+		return p
 	}
 	return filepath.Join(s.SessionDir(sess), DirMaterials)
+}
+
+// ShareIsFile 发资料是否指向单个文件
+func (s *Store) ShareIsFile(sess *Session) bool {
+	if sess == nil || strings.TrimSpace(sess.SharePath) == "" {
+		return false
+	}
+	st, err := os.Stat(filepath.Clean(sess.SharePath))
+	return err == nil && !st.IsDir()
 }
 
 func (s *Store) InboxDir(sess *Session) string {
@@ -192,12 +205,12 @@ func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, ca
 		sess.CanDownloadMaterials = true
 		sharePath = filepath.Clean(strings.TrimSpace(sharePath))
 		if sharePath == "" {
-			return nil, errors.New("请选择要发给学生的本地文件夹")
+			return nil, errors.New("请选择要发给学生的文件或文件夹")
 		}
-		st, err := os.Stat(sharePath)
-		if err != nil || !st.IsDir() {
-			return nil, errors.New("本地文件夹不存在或不是目录")
+		if _, err := os.Stat(sharePath); err != nil {
+			return nil, errors.New("本地路径不存在")
 		}
+		// 允许目录或单个文件
 		sess.SharePath = sharePath
 		sess.Folder = ""
 		sess.AccessPassword = strings.TrimSpace(accessPassword)
@@ -631,6 +644,26 @@ func HumanSize(n int64) string {
 }
 
 func (s *Store) ListMaterials(sess *Session) ([]FileItem, error) {
+	// 单个文件：只列出这一份
+	if s.ShareIsFile(sess) {
+		p := filepath.Clean(sess.SharePath)
+		info, err := os.Stat(p)
+		if err != nil {
+			return nil, err
+		}
+		name := filepath.Base(p)
+		rel := filepath.ToSlash(filepath.Join("share", sess.ID, name))
+		return []FileItem{{
+			Name:        name,
+			Path:        rel,
+			Size:        info.Size(),
+			SizeText:    HumanSize(info.Size()),
+			CanDownload: sess.CanDownloadMaterials || sess.Mode == ModeDistribute,
+			Kind:        "material",
+			Mine:        false,
+		}}, nil
+	}
+
 	dir := s.MaterialsDir(sess)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -729,7 +762,14 @@ func (s *Store) ResolveUnder(root, name string) (string, error) {
 func (s *Store) ResolveSessionFile(sess *Session, rel string) (string, error) {
 	relSlash := filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel)))
 	if sess != nil && sess.Mode == ModeDistribute && sess.SharePath != "" {
-		return s.ResolveUnder(sess.SharePath, filepath.Base(relSlash))
+		sp := filepath.Clean(sess.SharePath)
+		if st, err := os.Stat(sp); err == nil && !st.IsDir() {
+			if filepath.Base(relSlash) == filepath.Base(sp) {
+				return sp, nil
+			}
+			return "", errors.New("文件不存在")
+		}
+		return s.ResolveUnder(sp, filepath.Base(relSlash))
 	}
 	if sess != nil && sess.Mode == ModeCollect {
 		if strings.Contains(relSlash, "/"+DirInbox+"/") || strings.HasPrefix(relSlash, DirInbox+"/") {
@@ -1121,14 +1161,11 @@ func (s *Store) SetSharePath(id, sharePath string) (*Session, error) {
 	defer s.mu.Unlock()
 	sharePath = filepath.Clean(strings.TrimSpace(sharePath))
 	if sharePath == "" {
-		return nil, errors.New("请选择本地文件夹")
-	}
-	if err := os.MkdirAll(sharePath, 0755); err != nil {
-		return nil, fmt.Errorf("无法创建目录: %v", err)
+		return nil, errors.New("请选择本地文件或文件夹")
 	}
 	st, err := os.Stat(sharePath)
-	if err != nil || !st.IsDir() {
-		return nil, errors.New("本地文件夹不存在或不是目录")
+	if err != nil {
+		return nil, errors.New("本地路径不存在")
 	}
 	idx, err := s.loadIndex()
 	if err != nil {
@@ -1147,13 +1184,22 @@ func (s *Store) SetSharePath(id, sharePath string) (*Session, error) {
 	if sess.Mode != ModeDistribute && sess.Mode != ModeCollect {
 		return nil, errors.New("无效活动")
 	}
-	sess.SharePath = sharePath
 	if sess.Mode == ModeCollect {
+		if !st.IsDir() {
+			return nil, errors.New("收作业请选择文件夹")
+		}
+		if err := os.MkdirAll(sharePath, 0755); err != nil {
+			return nil, fmt.Errorf("无法创建目录: %v", err)
+		}
+		sess.SharePath = sharePath
 		sess.Folder = filepath.Base(sharePath)
 		_ = os.MkdirAll(filepath.Join(sharePath, DirMaterials), 0755)
 		_ = os.MkdirAll(filepath.Join(sharePath, DirInbox), 0755)
 		meta, _ := json.MarshalIndent(sess, "", "  ")
 		_ = os.WriteFile(filepath.Join(sharePath, "meta.json"), meta, 0644)
+	} else {
+		// 发资料：文件或文件夹均可
+		sess.SharePath = sharePath
 	}
 	if err := s.saveIndex(idx); err != nil {
 		return nil, err

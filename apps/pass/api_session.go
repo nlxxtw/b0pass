@@ -253,7 +253,7 @@ func SessionFolders(c *gin.Context) {
 }
 
 // SessionCaptureDrop 本机拖放识别路径（不上传、不拷贝，只填绝对路径）。
-// 若拖入的是文件，则填入其所在文件夹（发资料需要目录）。
+// 文件填文件路径，文件夹填文件夹路径。
 func SessionCaptureDrop(c *gin.Context) {
 	var body struct {
 		X int `json:"x"`
@@ -332,7 +332,6 @@ func normalizeLocalSharePath(raw string) (share string, wasFile bool, err error)
 		}
 		u = strings.ReplaceAll(u, "/", `\`)
 		if strings.HasPrefix(u, `\`) && len(u) > 2 && u[2] == ':' {
-			// \C:\path
 			u = u[1:]
 		}
 		if strings.HasPrefix(strings.ToLower(u), `localhost\`) {
@@ -348,10 +347,11 @@ func normalizeLocalSharePath(raw string) (share string, wasFile bool, err error)
 	if err != nil {
 		return "", false, errors.New("路径不存在：" + abs)
 	}
+	// 文件就返回文件路径，文件夹返回文件夹路径（不再偷偷改成父目录）
 	if st.IsDir() {
 		return abs, false, nil
 	}
-	return filepath.Dir(abs), true, nil
+	return abs, true, nil
 }
 
 // SessionPickFolder 本机弹窗选择。
