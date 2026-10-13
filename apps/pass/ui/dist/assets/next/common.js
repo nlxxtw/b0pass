@@ -175,7 +175,6 @@
       '<div class="card force-card">' +
       "<h2>发现新版本，请更新后继续使用</h2>" +
       '<p class="meta" id="forceUpdateMeta"></p>' +
-      '<p class="hint">将通过加速镜像下载 Releases 安装包，解压覆盖原程序后重新打开。</p>' +
       '<button type="button" class="btn block" id="forceUpdateBtn">立即更新</button>' +
       "</div>";
     document.body.appendChild(el);
