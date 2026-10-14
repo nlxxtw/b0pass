@@ -64,6 +64,12 @@ func SessionCreate(c *gin.Context) {
 		engine.ERR(err.Error(), c)
 		return
 	}
+	// 发文本：创建时就把教师标签绑到管理端当前 IPv4
+	if sess != nil && sess.Mode == session.ModeText {
+		if bound, err2 := sessStore.BindTeacherIP(sess.ID, clientIPv4(c), true); err2 == nil {
+			sess.TeacherIP = bound
+		}
+	}
 	engine.OK("OK", sess, c)
 }
 
@@ -90,6 +96,7 @@ func publicSessionView(s *session.Session) gin.H {
 		"canDownloadMaterials": s.CanDownloadMaterials,
 		"deadline":             s.Deadline,
 		"createdAt":            s.CreatedAt,
+		"teacherIp":            strings.TrimSpace(s.TeacherIP),
 		"needPassword":         sessStore.NeedPassword(s),
 		"expired":              sessStore.IsPastDeadline(s),
 	}
@@ -121,6 +128,9 @@ func SessionList(c *gin.Context) {
 		if s.Mode == session.ModeDistribute {
 			item["downloadCount"] = sessStore.ReadDownloads(s).UniqueIPTotal()
 			item["needPassword"] = sessStore.NeedPassword(s)
+		}
+		if s.Mode == session.ModeText {
+			item["messageCount"] = sessStore.TextMessageCount(s.ID)
 		}
 		list = append(list, item)
 	}
@@ -624,6 +634,9 @@ func PublicSessions(c *gin.Context) {
 			item["submitted"] = ok
 			item["submittedAt"] = at
 		}
+		if s.Mode == session.ModeText {
+			item["messageCount"] = sessStore.TextMessageCount(s.ID)
+		}
 		list = append(list, item)
 	}
 	engine.OK("OK", gin.H{
@@ -657,6 +670,12 @@ func PublicFiles(c *gin.Context) {
 		if err != nil {
 			engine.ERR(err.Error(), c)
 			return
+		}
+		if sess.Mode == session.ModeDistribute {
+			dl := sessStore.ReadDownloads(sess)
+			for i := range materials {
+				materials[i].DownloadCount = dl.FileUniqueCount(materials[i].Name)
+			}
 		}
 	}
 	submissions := []session.FileItem{}

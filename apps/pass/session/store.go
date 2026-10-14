@@ -18,6 +18,7 @@ import (
 const (
 	ModeDistribute = "distribute" // 发资料
 	ModeCollect    = "collect"    // 收作业
+	ModeText       = "text"       // 发文本
 )
 
 const (
@@ -30,12 +31,13 @@ type Session struct {
 	Name                 string `json:"name"`
 	Folder               string `json:"folder"`              // 收作业：files 下相对名；若有 SharePath 则仅作显示名
 	SharePath            string `json:"sharePath,omitempty"` // 发资料=资料夹；收作业=可选本机任意盘绝对路径
-	Mode                 string `json:"mode"`                // distribute | collect
+	Mode                 string `json:"mode"`                // distribute | collect | text
 	RequireIdentity      bool   `json:"requireIdentity"`
 	CanSeeOthers         bool   `json:"canSeeOthers"`
 	CanDownloadOthers    bool   `json:"canDownloadOthers"`
 	CanDownloadMaterials bool   `json:"canDownloadMaterials"`
 	AccessPassword       string `json:"accessPassword,omitempty"` // 发资料可选访问密码；空=不设
+	TeacherIP            string `json:"teacherIp,omitempty"`      // 发文本：教师机 IPv4，标签只绑此 IP
 	Deadline             string `json:"deadline,omitempty"`
 	CreatedAt            string `json:"createdAt"`
 }
@@ -180,7 +182,7 @@ func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, ca
 	if name == "" {
 		return nil, errors.New("名称不能为空")
 	}
-	if mode != ModeDistribute && mode != ModeCollect {
+	if mode != ModeDistribute && mode != ModeCollect && mode != ModeText {
 		return nil, errors.New("无效的活动类型")
 	}
 	if !canSeeOthers {
@@ -214,6 +216,20 @@ func (s *Store) Create(name, folder, sharePath, mode string, requireIdentity, ca
 		sess.SharePath = sharePath
 		sess.Folder = ""
 		sess.AccessPassword = strings.TrimSpace(accessPassword)
+	} else if mode == ModeText {
+		// 发文本：主题=名称，消息存 _nextpass/text/{id}.json
+		sess.Folder = ""
+		sess.SharePath = ""
+		sess.RequireIdentity = false
+		sess.CanSeeOthers = true
+		sess.CanDownloadOthers = false
+		sess.CanDownloadMaterials = false
+		sess.AccessPassword = ""
+		sess.Deadline = ""
+		if err := os.MkdirAll(s.textDir(), 0755); err != nil {
+			return nil, err
+		}
+		_ = s.saveTextMessages(id, []TextMessage{})
 	} else {
 		sharePath = filepath.Clean(strings.TrimSpace(sharePath))
 		folderRaw := strings.TrimSpace(folder)
@@ -333,7 +349,9 @@ func (s *Store) Delete(id string) error {
 	}
 	// 发资料只删登记，不删老师本机原文件夹
 	// 收作业若在任意盘：只清活动子目录，不删用户选中的父文件夹
-	if victim.Mode == ModeCollect && strings.TrimSpace(victim.SharePath) != "" {
+	if victim.Mode == ModeText {
+		s.removeTextMessages(victim.ID)
+	} else if victim.Mode == ModeCollect && strings.TrimSpace(victim.SharePath) != "" {
 		base := s.SessionDir(victim)
 		_ = os.RemoveAll(filepath.Join(base, DirInbox))
 		_ = os.RemoveAll(filepath.Join(base, DirMaterials))
@@ -1226,6 +1244,19 @@ func (s *Store) Stats(sess *Session) (map[string]interface{}, error) {
 		out["fileCount"] = len(materials)
 		out["studentCount"] = dl.UniqueIPTotal()
 		out["submissions"] = []FileItem{}
+		return out, nil
+	}
+	if sess.Mode == ModeText {
+		msgs, err := s.ListTextMessages(sess.ID)
+		if err != nil {
+			return nil, err
+		}
+		out["messages"] = msgs
+		out["messageCount"] = len(msgs)
+		out["fileCount"] = len(msgs)
+		out["studentCount"] = 0
+		out["submissions"] = []FileItem{}
+		out["materials"] = []FileItem{}
 		return out, nil
 	}
 

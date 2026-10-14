@@ -41,9 +41,15 @@ jobs:
             binary: nextpass
           - os: macos-latest
             goos: darwin
+            goarch: arm64
+            cgo: "0"
+            artifact: nextpass-mac-arm64
+            binary: nextpass
+          - os: macos-latest
+            goos: darwin
             goarch: amd64
             cgo: "0"
-            artifact: nextpass-mac
+            artifact: nextpass-mac-intel
             binary: nextpass
 
     steps:
@@ -197,12 +203,15 @@ jobs:
             ## 下载
             - **Windows**: `nextpass-win.zip`
             - **Linux**: `nextpass-linux.zip`
-            - **macOS**: `nextpass-mac.zip`
+            - **macOS Apple Silicon (M1/M2/M3)**: `nextpass-mac-arm64.zip`
+            - **macOS Intel**: `nextpass-mac-intel.zip`
 
             ## 使用
-            1. 解压运行
+            1. 解压运行（Mac 若提示无法打开：终端 `chmod +x nextpass` 后执行 `./nextpass`）
             2. **学生**：`http://老师IP:8000/`
             3. **老师**：`http://老师IP:8000/admin`（默认口令 `admin`，见 config.ini）
+
+            > Apple Silicon 请用 `nextpass-mac-arm64`；若误用 Intel 包会报 `bad CPU type in executable`。
           files: |
             out/*.zip
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}

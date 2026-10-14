@@ -1,5 +1,5 @@
 (function () {
-  var state = { sessions: [], openId: "" };
+  var state = { sessions: [], openId: "", textChat: null, textChatId: "" };
 
   function $(id) {
     return document.getElementById(id);
@@ -66,6 +66,12 @@
     $("main").innerHTML = '<div class="card empty">' + escapeHtml(msg || "暂无任务") + "</div>";
   }
 
+  function destroyTextChat() {
+    if (state.textChat && state.textChat.destroy) state.textChat.destroy();
+    state.textChat = null;
+    state.textChatId = "";
+  }
+
   function badgeFor(s) {
     if (s.mode === "collect" && s.submitted) {
       return { text: "已提交", cls: "done" };
@@ -75,6 +81,7 @@
 
   function renderList() {
     if (!state.sessions.length) {
+      destroyTextChat();
       renderEmpty("暂无任务");
       return;
     }
@@ -83,7 +90,11 @@
       var open = state.openId === s.id;
       var badge = badgeFor(s);
       var meta = "";
-      if (s.mode === "collect" && s.submitted && s.submittedAt) {
+      if (s.mode === "text") {
+        if ((s.messageCount || 0) > 0) {
+          meta = s.messageCount + " 条消息";
+        }
+      } else if (s.mode === "collect" && s.submitted && s.submittedAt) {
         meta = "最近提交 " + escapeHtml(s.submittedAt);
       } else if (s.deadline) {
         meta = "截止 " + escapeHtml(String(s.deadline).replace("T", " "));
@@ -94,6 +105,14 @@
       if (s.expired) {
         meta += (meta ? " · " : "") + "已截止";
       }
+      var badgeHtml =
+        s.mode === "text"
+          ? ""
+          : '<span class="badge ' +
+            badge.cls +
+            '">' +
+            escapeHtml(badge.text) +
+            "</span>";
       html +=
         '<div class="card acc' +
         (open ? " open" : "") +
@@ -104,11 +123,8 @@
         '<button type="button" class="acc-head">' +
         "<div><div class=\"title\">" +
         escapeHtml(s.name) +
-        '<span class="badge ' +
-        badge.cls +
-        '">' +
-        escapeHtml(badge.text) +
-        "</span></div>" +
+        badgeHtml +
+        "</div>" +
         (meta ? '<div class="meta">' + meta + "</div>" : "") +
         "</div>" +
         '<span class="acc-che">' +
@@ -125,7 +141,9 @@
     document.querySelectorAll(".acc").forEach(function (card) {
       card.querySelector(".acc-head").onclick = function () {
         var id = card.getAttribute("data-id");
-        state.openId = state.openId === id ? "" : id;
+        var next = state.openId === id ? "" : id;
+        if (next !== state.textChatId) destroyTextChat();
+        state.openId = next;
         renderList();
         if (state.openId) fillBody(state.openId);
       };
@@ -137,6 +155,24 @@
     var s = findSession(id);
     var box = document.getElementById("body-" + id);
     if (!s || !box) return;
+
+    if (s.mode === "text") {
+      if (state.textChatId === id && state.textChat && box.querySelector(".text-chat")) {
+        return;
+      }
+      destroyTextChat();
+      box.innerHTML = "";
+      state.textChatId = id;
+      state.textChat = NP.mountTextChat(box, {
+        sessionId: id,
+        asTeacher: false,
+        topic: s.name || "",
+        pollMs: 2000,
+      });
+      return;
+    }
+
+    if (state.textChatId && state.textChatId !== id) destroyTextChat();
 
     var html = "";
     if (s.mode === "distribute" && s.needPassword && !getSavedPwd(id)) {
@@ -185,7 +221,7 @@
 
     if (s.mode === "distribute") {
       html += '<div class="block"><ul class="list flist"><li><div class="meta">加载中</div></li></ul></div>';
-    } else {
+    } else if (s.mode === "collect") {
       if (s.requireIdentity) {
         var p = NP.studentProfile();
         html +=
@@ -208,6 +244,8 @@
         html += '<div class="block"><p class="meta" style="color:var(--danger)">已截止</p></div>';
       }
       html += '<div class="block"><ul class="list flist"><li><div class="meta">加载中</div></li></ul></div>';
+    } else {
+      html += '<div class="block"><p class="meta">未知活动类型</p></div>';
     }
     box.innerHTML = html;
 
@@ -221,7 +259,9 @@
         uploadFiles(id, s, box, fileInput.files);
       };
     }
-    loadFiles(id, box, s);
+    if (s.mode === "distribute" || s.mode === "collect") {
+      loadFiles(id, box, s);
+    }
   }
 
   async function revealFile(id, f, dirOnly) {
@@ -303,7 +343,12 @@
             meta.push(it.mine ? "我的" : escapeHtml(it.studentName || "同学"));
             if (it.submittedAt) meta.push(it.submittedAt);
           }
-          meta.push(it.sizeText || "");
+          if (it.sizeText) meta.push(it.sizeText);
+          if (it.kind === "material" && (it.downloadCount || 0) > 0) {
+            meta.push("下载 " + it.downloadCount + " 次");
+          } else if (it.kind === "material") {
+            meta.push("下载 0 次");
+          }
           var action = "";
           var dlUrl =
             "/pass/public/download?" + identityQueryWithPwd(id, { id: id, f: it.path });
@@ -540,14 +585,26 @@
         state.openId = state.sessions[0].id;
       } else if (keepOpen && !findSession(keepOpen)) {
         state.openId = "";
+        destroyTextChat();
       }
       if (!same) {
+        var keepText =
+          state.openId &&
+          state.textChatId === state.openId &&
+          state.textChat &&
+          findSession(state.openId) &&
+          findSession(state.openId).mode === "text";
+        if (!keepText) destroyTextChat();
         renderList();
       } else if (state.openId) {
         var box = document.getElementById("body-" + state.openId);
         var s = findSession(state.openId);
         if (box && s && !box.hidden) {
-          await loadFiles(state.openId, box, s);
+          if (s.mode === "text") {
+            /* 聊天自己轮询 */
+          } else {
+            await loadFiles(state.openId, box, s);
+          }
         }
       } else {
         renderList();

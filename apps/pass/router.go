@@ -78,6 +78,9 @@ func routeApi() {
 	// 学生端「打开」：在老师主机上打开作业所在文件夹
 	engine.Gin.POST("/pass/public/reveal", PublicReveal)
 	GET("/public/reveal", "{id,f}", "本机打开", PublicReveal)
+	GET("/public/text/messages", "{id}", "发文本消息列表", PublicTextMessages)
+	engine.Gin.POST("/pass/public/text/send", PublicTextSend)
+	engine.Gin.POST("/pass/public/text/delete", PublicTextDelete)
 
 	GETX("/read-config", "{}", "读取配置(ro)", ReadConfig)
 	GETX("/read-ip", "{}", "读取IP(ro)", ReadIP)

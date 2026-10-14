@@ -1,5 +1,12 @@
 (function () {
-  var state = { index: null, stats: null, statsId: "", _wired: false, _poll: null };
+  var state = {
+    index: null,
+    stats: null,
+    statsId: "",
+    textChat: null,
+    _wired: false,
+    _poll: null,
+  };
 
   function $(id) {
     return document.getElementById(id);
@@ -45,7 +52,15 @@
     return b ? b.dataset.mode : "collect";
   }
 
+  function destroyTextChat() {
+    if (state.textChat && state.textChat.destroy) state.textChat.destroy();
+    state.textChat = null;
+    var panel = $("statsTextPanel");
+    if (panel) panel.innerHTML = "";
+  }
+
   function closeStats() {
+    destroyTextChat();
     var card = $("statsCard");
     if (card) card.hidden = true;
     state.statsId = "";
@@ -55,22 +70,33 @@
   function syncModeUI() {
     var mode = currentMode();
     var collect = mode === "collect";
+    var distribute = mode === "distribute";
+    var text = mode === "text";
     $("collectOpts").style.display = collect ? "" : "none";
     $("deadlineField").style.display = collect ? "" : "none";
     $("collectFolderField").hidden = !collect;
     $("collectFolderField").style.display = collect ? "" : "none";
-    $("sharePathField").hidden = collect;
-    $("sharePathField").style.display = collect ? "none" : "";
-    $("accessPwdField").hidden = collect;
-    $("accessPwdField").style.display = collect ? "none" : "";
+    $("sharePathField").hidden = !distribute;
+    $("sharePathField").style.display = distribute ? "" : "none";
+    $("accessPwdField").hidden = !distribute;
+    $("accessPwdField").style.display = distribute ? "" : "none";
+    var nameLabel = $("nameLabel");
+    if (nameLabel) nameLabel.textContent = text ? "主题" : "名称";
+    var nameInput = $("name");
+    if (nameInput) {
+      nameInput.placeholder = text
+        ? "如：课堂讨论 · 实验注意事项"
+        : "如：第3章实验";
+    }
     var createBtn = $("createBtn");
-    createBtn.className = "btn block " + (collect ? "collect" : "");
-    createBtn.textContent = collect ? "创建收作业" : "创建发资料";
-    $("listTitle").textContent = collect ? "收作业列表" : "发资料列表";
+    createBtn.className = "btn block " + NP.modeClass(mode);
+    createBtn.textContent =
+      collect ? "创建收作业" : distribute ? "创建发资料" : "创建发文本";
+    $("listTitle").textContent =
+      collect ? "收作业列表" : distribute ? "发资料列表" : "发文本列表";
     if (collect && !$("folder").value.trim()) {
       $("folder").value = todayFolder();
     }
-    // 切换收作业/发资料时关掉详情，避免串台
     closeStats();
     renderList();
   }
@@ -145,7 +171,7 @@
     if (!sessions.length) {
       ul.innerHTML =
         '<li class="empty-row"><div class="meta">暂无' +
-        (mode === "collect" ? "收作业" : "发资料") +
+        NP.modeLabel(mode) +
         "，先在上方创建</div></li>";
       return;
     }
@@ -153,41 +179,55 @@
       .map(function (s) {
         var mc = NP.modeClass(s.mode);
         var isCollect = s.mode === "collect";
+        var isText = s.mode === "text";
         var actions =
           '<button class="btn ghost" data-stats="' +
           s.id +
-          '">详情</button>' +
+          '">' +
+          (isText ? "打开" : "详情") +
+          "</button>" +
           '<button class="btn danger" data-del="' +
           s.id +
           '" data-name="' +
           escapeAttr(s.name) +
           '">删除</button>';
-        var whereFull = isCollect
-          ? s.sharePath || s.folder || (s.createdAt ? s.createdAt.replace(/[-:T]/g, "").slice(0, 8) : "")
-          : s.sharePath || "";
-        var where = shortPath(whereFull);
+        var whereFull = isText
+          ? ""
+          : isCollect
+            ? s.sharePath ||
+              s.folder ||
+              (s.createdAt ? s.createdAt.replace(/[-:T]/g, "").slice(0, 8) : "")
+            : s.sharePath || "";
+        var where = isText ? "" : shortPath(whereFull);
         var extra = "";
-        if (!isCollect && s.needPassword) {
+        if (isText && (s.messageCount || 0) > 0) {
+          extra += s.messageCount + " 条消息";
+        }
+        if (!isCollect && !isText && s.needPassword) {
           extra += " · 需密码";
         }
-        if (!isCollect && (s.downloadCount || 0) > 0) {
-          extra += " · 下载 " + s.downloadCount + " 人";
-        }
+        var badge =
+          isText
+            ? ""
+            : '<span class="badge ' + mc + '">' + NP.modeLabel(s.mode) + "</span>";
+        var metaBits = [];
+        if (where) metaBits.push(escapeHtml(where));
+        if (s.createdAt) metaBits.push(escapeHtml(s.createdAt.replace("T", " ").slice(0, 16)));
+        if (extra) metaBits.push(escapeHtml(extra.replace(/^ · /, "")));
         return (
           '<li class="sess-item">' +
           '<div class="sess-main"><div class="title">' +
           escapeHtml(s.name) +
-          '<span class="badge ' +
-          mc +
-          '">' +
-          NP.modeLabel(s.mode) +
-          "</span></div><div class=\"meta\" title=\"" +
-          escapeAttr(whereFull) +
-          '">' +
-          escapeHtml(where) +
-          (s.createdAt ? " · " + escapeHtml(s.createdAt.replace("T", " ").slice(0, 16)) : "") +
-          extra +
-          '</div></div><div class="sess-actions">' +
+          badge +
+          "</div>" +
+          (metaBits.length
+            ? '<div class="meta" title="' +
+              escapeAttr(whereFull) +
+              '">' +
+              metaBits.join(" · ") +
+              "</div>"
+            : "") +
+          '</div><div class="sess-actions">' +
           actions +
           "</div></li>"
         );
@@ -207,8 +247,8 @@
             method: "POST",
             json: {},
           });
-          $("statsCard").hidden = true;
-          loadList();
+          closeStats();
+          loadList({ force: true });
         } catch (e) {
           NP.toast(e.message);
         }
@@ -343,9 +383,36 @@
         card.scrollIntoView({ behavior: "smooth", block: "start" });
       }
       var s = state.stats.session || {};
-      var isCollect = s.mode !== "distribute";
+      var isCollect = s.mode === "collect";
+      var isText = s.mode === "text";
+      var filePanel = $("statsFilePanel");
+      var textPanel = $("statsTextPanel");
 
       $("statsTitle").textContent = s.name || "详情";
+
+      if (isText) {
+        if (filePanel) filePanel.hidden = true;
+        if (textPanel) textPanel.hidden = false;
+        $("statsSummary").textContent =
+          (state.stats.messageCount || 0) + " 条消息";
+        if (!opts.quiet || !state.textChat) {
+          destroyTextChat();
+          state.textChat = NP.mountTextChat(textPanel, {
+            sessionId: id,
+            asTeacher: true,
+            topic: s.name || "",
+            pollMs: 2500,
+          });
+        } else if (state.textChat.refresh) {
+          state.textChat.refresh();
+        }
+        return;
+      }
+
+      destroyTextChat();
+      if (filePanel) filePanel.hidden = false;
+      if (textPanel) textPanel.hidden = true;
+
       if (isCollect) {
         $("statsSummary").textContent =
           (state.stats.studentCount || 0) + " 人已交 · " + (state.stats.fileCount || 0) + " 个文件";
@@ -377,10 +444,7 @@
           : '<tr><td colspan="6" class="meta">还没有学生提交</td></tr>';
       } else {
         $("statsSummary").textContent =
-          (state.stats.materialCount || 0) +
-          " 个文件 · 学生下载 " +
-          (state.stats.downloadCount || 0) +
-          " 人（按 IPv4 去重）";
+          (state.stats.materialCount || 0) + " 个文件";
         $("statsPathLabel").textContent = "本地资料文件夹";
         $("statsPath").value = s.sharePath || state.stats.materialsPath || "";
         $("statsHead").innerHTML =
@@ -482,7 +546,7 @@
       } else {
         body.folder = loc;
       }
-    } else {
+    } else if (mode === "distribute") {
       body.sharePath = ($("sharePath").value || "").trim();
       if (!body.sharePath) {
         NP.toast("请选择要发给学生的文件或文件夹");
@@ -503,12 +567,13 @@
       }
       body.accessPassword = ($("accessPwd").value || "").trim();
     }
+    // mode === "text"：只需主题名称
     try {
       var sess = await NP.api("/pass/session/create", { method: "POST", json: body });
       $("name").value = "";
       if (mode === "collect") {
         $("folder").value = todayFolder();
-      } else {
+      } else if (mode === "distribute") {
         $("sharePath").value = "";
         $("accessPwd").value = "";
       }
@@ -516,8 +581,13 @@
       NP.toast(
         mode === "collect"
           ? "已创建收作业 · " + (sess.folder || body.folder)
-          : "已创建发资料"
+          : mode === "distribute"
+            ? "已创建发资料"
+            : "已创建发文本 · 学生端可见"
       );
+      if (mode === "text" && sess && sess.id) {
+        loadStats(sess.id);
+      }
     } catch (e) {
       NP.toast(e.message);
     }
@@ -527,7 +597,7 @@
     document.querySelectorAll("#modeSeg button").forEach(function (btn) {
       btn.onclick = function () {
         document.querySelectorAll("#modeSeg button").forEach(function (b) {
-          b.classList.remove("active", "send", "collect");
+          b.classList.remove("active", "send", "collect", "text");
         });
         btn.classList.add("active", NP.modeClass(btn.dataset.mode));
         syncModeUI();
