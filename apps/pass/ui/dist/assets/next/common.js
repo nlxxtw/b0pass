@@ -156,7 +156,13 @@
     return (d.innerText || d.textContent || "").replace(/\u00a0/g, " ").trim();
   }
 
+  function richHasMedia(html) {
+    return /<img\b/i.test(html || "") || /<video\b/i.test(html || "");
+  }
+
   function richLooksEmpty(html) {
+    // 纯截图/图片也可发送，不必再加文字
+    if (richHasMedia(html)) return false;
     return !htmlToPlain(html);
   }
 
@@ -219,10 +225,23 @@
         } else {
           body = cleanRichHtml(body);
         }
+        var hasImg = richHasMedia(body);
+        var hasText = !!htmlToPlain(body);
+        // 有图：不显示复制文字/HTML；纯文字才显示
+        var copyBtns =
+          !hasImg && hasText
+            ? '<button type="button" class="text-act" data-copyhtml="' +
+              mid +
+              '">【复制HTML】</button>' +
+              '<button type="button" class="text-act" data-copytext="' +
+              mid +
+              '">【复制文字】</button>'
+            : "";
         return (
           '<div class="text-msg ' +
           roleCls +
           (mine ? " mine" : "") +
+          (hasImg ? " has-img" : "") +
           '" data-msgid="' +
           mid +
           '">' +
@@ -235,12 +254,7 @@
           escapeChat(formatMsgTime(m.createdAt)) +
           "</span></span>" +
           '<span class="text-bar-actions">' +
-          '<button type="button" class="text-act" data-copyhtml="' +
-          mid +
-          '">【复制HTML】</button>' +
-          '<button type="button" class="text-act" data-copytext="' +
-          mid +
-          '">【复制文字】</button>' +
+          copyBtns +
           (canDelete
             ? '<button type="button" class="text-act text-x" data-delmsg="' +
               mid +
@@ -288,6 +302,8 @@
       '<span class="rt-sep"></span>' +
       '<button type="button" class="rt-btn" data-cmd="removeFormat" title="清除格式">T̲</button>' +
       '<button type="button" class="rt-btn" data-cmd="code" title="代码">&lt;/&gt;</button>' +
+      '<span class="rt-sep"></span>' +
+      '<button type="button" class="rt-btn" data-cmd="pickImage" title="插入图片">图</button>' +
       "</div>"
     );
   }
@@ -313,7 +329,7 @@
       '<div class="text-stream" aria-live="polite"></div>' +
       '<div class="text-composer">' +
       richToolbarHtml() +
-      '<div class="rt-editor" contenteditable="true" data-placeholder="输入内容，可设置字号/颜色/列表/代码…"></div>' +
+      '<div class="rt-editor" contenteditable="true" data-placeholder="输入内容…"></div>' +
       '<div class="text-compose-actions">' +
       '<button type="button" class="btn text text-send">发送</button></div></div></div>';
 
@@ -321,6 +337,11 @@
     var editor = root.querySelector(".rt-editor");
     var sendBtn = root.querySelector(".text-send");
     var toolbar = root.querySelector(".rt-toolbar");
+    var imgInput = document.createElement("input");
+    imgInput.type = "file";
+    imgInput.accept = "image/*";
+    imgInput.style.display = "none";
+    root.appendChild(imgInput);
 
     function sig(list) {
       return (list || [])
@@ -336,11 +357,71 @@
       });
     }
 
+    function uploadChatImage(file) {
+      if (!file) return Promise.reject(new Error("无图片"));
+      return uploadFile(
+        "/pass/public/text/upload?id=" + encodeURIComponent(sessionId),
+        file
+      ).then(function (data) {
+        var url = data && data.url;
+        if (!url) throw new Error("上传失败");
+        return url;
+      });
+    }
+
+    function insertImageUrl(url) {
+      editor.focus();
+      document.execCommand(
+        "insertHTML",
+        false,
+        '<img src="' +
+          escapeAttr(url) +
+          '" alt="图片" style="max-width:100%;height:auto;border-radius:8px;display:block;margin:4px 0">'
+      );
+    }
+
+    async function insertImageFile(file) {
+      if (!file || !String(file.type || "").startsWith("image/")) {
+        toast("请选择图片");
+        return;
+      }
+      toast("图片上传中…");
+      try {
+        var url = await uploadChatImage(file);
+        insertImageUrl(url);
+      } catch (err) {
+        toast((err && err.message) || "图片上传失败");
+      }
+    }
+
+    /** 发送前：把编辑器里残留的 data: 图也上传成短链接 */
+    async function materializeEditorImages() {
+      var imgs = editor.querySelectorAll("img");
+      for (var i = 0; i < imgs.length; i++) {
+        var src = imgs[i].getAttribute("src") || "";
+        if (src.indexOf("data:image") !== 0) continue;
+        try {
+          var blob = await (await fetch(src)).blob();
+          var ext = (blob.type || "image/png").split("/")[1] || "png";
+          var file = new File([blob], "paste." + ext, { type: blob.type || "image/png" });
+          var url = await uploadChatImage(file);
+          imgs[i].setAttribute("src", url);
+        } catch (e) {
+          throw new Error("图片处理失败，请重试");
+        }
+      }
+    }
+
     function runCmd(cmd, val) {
       editor.focus();
       try {
         document.execCommand("styleWithCSS", false, true);
       } catch (e) {}
+      if (cmd === "pickImage") {
+        imgInput.value = "";
+        imgInput.click();
+        return;
+      }
       if (cmd === "code") {
         var sel = window.getSelection();
         var t = sel && !sel.isCollapsed ? sel.toString() : "code";
@@ -360,6 +441,11 @@
       if (val != null && val !== "") document.execCommand(cmd, false, val);
       else document.execCommand(cmd, false, null);
     }
+
+    imgInput.addEventListener("change", function () {
+      var f = imgInput.files && imgInput.files[0];
+      if (f) insertImageFile(f);
+    });
 
     toolbar.addEventListener("mousedown", function (e) {
       // 避免点工具栏时编辑器失焦丢选区
@@ -486,13 +572,14 @@
     }
 
     async function send() {
-      var body = cleanRichHtml((editor.innerHTML || "").trim());
-      if (richLooksEmpty(body)) {
-        toast("写点内容再发");
-        return;
-      }
       sendBtn.disabled = true;
       try {
+        await materializeEditorImages();
+        var body = cleanRichHtml((editor.innerHTML || "").trim());
+        if (richLooksEmpty(body)) {
+          toast("写点内容或贴一张图再发");
+          return;
+        }
         await api("/pass/public/text/send", {
           method: "POST",
           json: { id: sessionId, body: body },
@@ -518,9 +605,49 @@
         send();
       }
     });
+    // 粘贴截图：直接上传插入，不必再加文字
+    editor.addEventListener("paste", function (e) {
+      var cd = e.clipboardData || window.clipboardData;
+      if (!cd) return;
+      var items = cd.items || [];
+      var file = null;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type && items[i].type.indexOf("image/") === 0) {
+          file = items[i].getAsFile();
+          break;
+        }
+      }
+      if (!file && cd.files && cd.files.length) {
+        for (var j = 0; j < cd.files.length; j++) {
+          if (String(cd.files[j].type || "").indexOf("image/") === 0) {
+            file = cd.files[j];
+            break;
+          }
+        }
+      }
+      if (!file) return;
+      e.preventDefault();
+      var text = (cd.getData("text/plain") || "").replace(/\u00a0/g, " ").trim();
+      insertImageFile(file).then(function () {
+        if (!text) return;
+        editor.focus();
+        document.execCommand("insertText", false, text);
+      });
+    });
 
-    refresh();
-    timer = setInterval(refresh, pollMs);
+    function schedulePoll() {
+      if (timer) clearInterval(timer);
+      timer = null;
+      if (destroyed) return;
+      // 标签页隐藏时降低轮询，减轻后台刷请求
+      var ms = document.hidden ? Math.max(pollMs * 4, 10000) : pollMs;
+      timer = setInterval(function () {
+        if (!document.hidden) refresh();
+      }, ms);
+      if (!document.hidden) refresh();
+    }
+    document.addEventListener("visibilitychange", schedulePoll);
+    schedulePoll();
 
     return {
       refresh: refresh,
@@ -532,14 +659,23 @@
     };
   }
 
-  // Safari：必须在点击手势内同步跳转；fetch+blob 会丢手势导致点了没反应
-  function downloadFile(url) {
+  // Safari：必须在点击手势内同步跳转；fetch+blob 会丢手势导致点了没反应。
+  // 用 <a download> 立刻触发浏览器下载栏，不要等整文件收完。
+  function downloadFile(url, name) {
     var a = document.createElement("a");
     a.href = url;
     a.rel = "noopener";
+    if (name) {
+      try {
+        a.setAttribute("download", String(name));
+      } catch (e) {}
+    }
+    // 同步点击，尽量让浏览器马上出现下载进度
     document.body.appendChild(a);
     a.click();
-    a.remove();
+    setTimeout(function () {
+      if (a.parentNode) a.parentNode.removeChild(a);
+    }, 0);
     return Promise.resolve();
   }
 
@@ -620,43 +756,13 @@
     toast("已开始下载，请解压覆盖后重启");
   }
 
+  // 浏览器端不再弹强制更新/显示版本条；更新请在教师机桌面面板操作
   async function checkUpdate(opts) {
     opts = opts || {};
-    var data;
-    try {
-      data = await api("/pass/public/update-check", { noRedirect: true });
-    } catch (e) {
-      if (opts.manual) toast(e.message || "检查更新失败");
-      return null;
+    if (opts.manual) {
+      toast("请到教师机「NextPass 面板」里检查更新");
     }
-    var verEl = document.getElementById("appVersion");
-    if (verEl) verEl.textContent = "v" + (data.current || "");
-    if (data.needUpdate) {
-      var box = ensureUpdateModal();
-      var meta = document.getElementById("forceUpdateMeta");
-      if (meta) {
-        meta.textContent =
-          "当前 v" +
-          (data.current || "?") +
-          " → 最新 v" +
-          (data.latest || "?") +
-          "（" +
-          (data.asset || "安装包") +
-          "）";
-      }
-      box.hidden = false;
-      document.documentElement.classList.add("update-locked");
-      var btn = document.getElementById("forceUpdateBtn");
-      if (btn) {
-        btn.onclick = function () {
-          openUpdateDownload(data.downloadUrl || data.releaseUrl);
-        };
-      }
-    } else if (opts.manual) {
-      if (data.checkError) toast("检查失败：" + data.checkError);
-      else toast("已是最新版本 v" + (data.current || ""));
-    }
-    return data;
+    return null;
   }
 
   global.NP = {

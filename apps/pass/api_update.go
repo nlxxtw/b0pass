@@ -141,33 +141,63 @@ func pickDownloadURL(rel *ghRelease) string {
 	return mirrorURL(fmt.Sprintf("https://github.com/%s/releases/latest", GithubRepo))
 }
 
-// PublicUpdateCheck 检查 GitHub Releases 是否有新版本（强制更新用）
-func PublicUpdateCheck(c *gin.Context) {
+// UpdateInfo 版本检查结果（面板与 HTTP 共用）
+type UpdateInfo struct {
+	Current     string `json:"current"`
+	Latest      string `json:"latest"`
+	NeedUpdate  bool   `json:"needUpdate"`
+	DownloadURL string `json:"downloadUrl"`
+	ReleaseURL  string `json:"releaseUrl"`
+	Notes       string `json:"notes"`
+	Asset       string `json:"asset"`
+	Repo        string `json:"repo"`
+	Mirror      string `json:"mirror"`
+	CheckError  string `json:"checkError,omitempty"`
+}
+
+// CheckUpdateInfo 拉取 GitHub Releases 最新版
+func CheckUpdateInfo() UpdateInfo {
 	cur := normalizeVer(AppVersion)
-	out := gin.H{
-		"current":     cur,
-		"latest":      cur,
-		"needUpdate":  false,
-		"downloadUrl": "",
-		"releaseUrl":  mirrorURL(fmt.Sprintf("https://github.com/%s/releases/latest", GithubRepo)),
-		"notes":       "",
-		"asset":       assetNameForOS(),
-		"repo":        GithubRepo,
-		"mirror":      GithubMirror,
+	out := UpdateInfo{
+		Current:    cur,
+		Latest:     cur,
+		NeedUpdate: false,
+		ReleaseURL: mirrorURL(fmt.Sprintf("https://github.com/%s/releases/latest", GithubRepo)),
+		Asset:      assetNameForOS(),
+		Repo:       GithubRepo,
+		Mirror:     GithubMirror,
 	}
 	rel, err := fetchLatestRelease()
 	if err != nil {
-		// 检查失败不强制拦死（避免无网完全不能用），前端可提示
-		out["checkError"] = err.Error()
-		engine.OK("OK", out, c)
-		return
+		out.CheckError = err.Error()
+		return out
 	}
 	latest := normalizeVer(rel.TagName)
-	out["latest"] = latest
-	out["notes"] = rel.Body
-	out["downloadUrl"] = pickDownloadURL(rel)
+	out.Latest = latest
+	out.Notes = rel.Body
+	out.DownloadURL = pickDownloadURL(rel)
 	if compareSemver(latest, cur) > 0 {
-		out["needUpdate"] = true
+		out.NeedUpdate = true
+	}
+	return out
+}
+
+// PublicUpdateCheck 检查 GitHub Releases 是否有新版本（强制更新用）
+func PublicUpdateCheck(c *gin.Context) {
+	info := CheckUpdateInfo()
+	out := gin.H{
+		"current":     info.Current,
+		"latest":      info.Latest,
+		"needUpdate":  info.NeedUpdate,
+		"downloadUrl": info.DownloadURL,
+		"releaseUrl":  info.ReleaseURL,
+		"notes":       info.Notes,
+		"asset":       info.Asset,
+		"repo":        info.Repo,
+		"mirror":      info.Mirror,
+	}
+	if info.CheckError != "" {
+		out["checkError"] = info.CheckError
 	}
 	engine.OK("OK", out, c)
 }

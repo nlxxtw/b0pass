@@ -6,10 +6,13 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/gin-gonic/gin"
@@ -72,10 +75,40 @@ func run() {
 		engine.Gin.GET("/dev/api", getApp)
 	}
 
-	//启动httpd服务
+	// 路由注册完毕；是否立即监听由 AutoListen 控制（桌面面板为 false，点启动再听）
 	engine.Addr = config.ListenAddr
 	engine.Domain = config.Domain
-	engine.Gin.Run(config.ListenAddr)
+	if AutoListen {
+		if err := StartServer(config.ListenAddr); err != nil {
+			engine.Print(aurora.Red("HTTP 启动失败: "), err)
+		}
+		// 阻塞，保持进程（无面板模式）
+		select {}
+	}
+}
+
+func localProbeAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		// 兼容少见写法
+		if strings.HasPrefix(listen, ":") {
+			return net.JoinHostPort("127.0.0.1", strings.TrimPrefix(listen, ":"))
+		}
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func tcpAlive(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
 }
 
 // 读取配置信息

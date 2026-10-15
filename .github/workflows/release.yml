@@ -6,7 +6,7 @@ on:
       version:
         description: "Release tag (e.g. v2.1.0)"
         required: true
-        default: "v2.1.0"
+        default: "v2.1.6"
       prerelease:
         description: "Mark as pre-release"
         required: false
@@ -71,7 +71,8 @@ jobs:
         if: matrix.goos != 'windows'
         shell: bash
         run: |
-          if [ -f main/main.syso ]; then mv main/main.syso main/main.syso.bak; fi
+          # 避免把 Windows 资源文件链进 mac/linux
+          find main -maxdepth 1 -name '*.syso' -exec mv {} {}.bak \; || true
 
       - name: Resolve version for ldflags
         id: buildver
@@ -84,6 +85,17 @@ jobs:
           fi
           V="${V#v}"
           echo "ver=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Embed Windows GUI manifest (teacher shell)
+        if: matrix.goos == 'windows'
+        working-directory: main
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 嵌入 Common Controls + DPI 清单，修复 walk 面板 TTM_ADDTOOL；无需 WebView2
+          rm -f rsrc_windows_amd64.syso *.syso
+          go run github.com/akavel/rsrc@v0.10.2 -manifest app.manifest -o rsrc_windows_amd64.syso
+          ls -lh rsrc_windows_amd64.syso
 
       - name: Build
         working-directory: main
@@ -108,6 +120,10 @@ jobs:
           fi
           VER="${{ steps.buildver.outputs.ver }}"
           LDFLAGS="-s -w -X b0go/apps/pass.AppVersion=${VER}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            # 无黑框控制台；双击出教师机面板
+            LDFLAGS="${LDFLAGS} -H windowsgui"
+          fi
           go build -trimpath -ldflags="$LDFLAGS" -o "../dist/${{ matrix.artifact }}/${{ matrix.binary }}" .
           ls -lh "../dist/${{ matrix.artifact }}/${{ matrix.binary }}"
 
@@ -127,14 +143,28 @@ jobs:
             'CodeReadOnly = ""' \
             'LockUploadDir = ""' \
             > "$PKG/config.ini"
-          printf '%s\n' \
-            '# NextPass' \
-            '' \
-            '1. 运行 nextpass / nextpass.exe' \
-            '2. 学生打开 http://老师IP:8000/' \
-            '3. 老师打开 http://老师IP:8000/admin （默认口令 admin）' \
-            > "$PKG/readme.md"
-          if [ "${{ matrix.goos }}" != "windows" ]; then
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            cp main/app.manifest "$PKG/nextpass.exe.manifest"
+            printf '%s\n' \
+              '# NextPass Windows' \
+              '' \
+              '1. 双击 nextpass.exe → 打开「教师机面板」（不是黑框）' \
+              '2. 面板里可改端口/密码、启动停止、看日志、检查更新' \
+              '3. 关闭面板窗口 = 停止局域网服务' \
+              '4. 学生浏览器打开 http://老师IP:8000/' \
+              '5. 管理端也可从面板「打开管理端」（默认口令 admin）' \
+              '' \
+              '说明：Windows 包在 GitHub Actions 里嵌入了 GUI 清单，教室机无需再装 WebView2。' \
+              '请保持 nextpass.exe.manifest 与 exe 在同一目录（备用）。' \
+              > "$PKG/readme.md"
+          else
+            printf '%s\n' \
+              '# NextPass' \
+              '' \
+              '1. 运行 ./nextpass' \
+              '2. 学生打开 http://老师IP:8000/' \
+              '3. 老师打开 http://老师IP:8000/admin （默认口令 admin）' \
+              > "$PKG/readme.md"
             chmod +x "$PKG/${{ matrix.binary }}"
           fi
           if [ "${{ matrix.goos }}" = "windows" ] && [ -f "zdoc/b0pass-win/zlib1.dll" ]; then
@@ -201,17 +231,22 @@ jobs:
             NextPass 局域网作业助手（基于 b0pass 改造）
 
             ## 下载
-            - **Windows**: `nextpass-win.zip`
+            - **Windows（教师机面板壳）**: `nextpass-win.zip` — Actions 嵌入 GUI 清单，双击出面板，无需 WebView2
             - **Linux**: `nextpass-linux.zip`
             - **macOS Apple Silicon (M1/M2/M3)**: `nextpass-mac-arm64.zip`
             - **macOS Intel**: `nextpass-mac-intel.zip`
 
-            ## 使用
-            1. 解压运行（Mac 若提示无法打开：终端 `chmod +x nextpass` 后执行 `./nextpass`）
-            2. **学生**：`http://老师IP:8000/`
-            3. **老师**：`http://老师IP:8000/admin`（默认口令 `admin`，见 config.ini）
+            ## Windows 使用
+            1. 解压后双击 `nextpass.exe` → **教师机面板**（配置/启停/日志/更新）
+            2. 关闭面板 = 停止服务
+            3. **学生**浏览器：`http://老师IP:8000/`
+            4. **管理端**：面板内打开，或浏览器 `http://老师IP:8000/admin`（默认口令 `admin`）
 
-            > Apple Silicon 请用 `nextpass-mac-arm64`；若误用 Intel 包会报 `bad CPU type in executable`。
+            ## 其它平台
+            1. 运行 `./nextpass`（Mac 若无法打开：`chmod +x nextpass && ./nextpass`）
+            2. 浏览器访问学生端 / 管理端同上
+
+            > Apple Silicon 请用 `nextpass-mac-arm64`；误用 Intel 包会报 `bad CPU type in executable`。
           files: |
             out/*.zip
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}

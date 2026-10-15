@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -76,10 +77,18 @@ func stripDangerousHTML(html string) string {
 	}
 	re3 := regexp.MustCompile(`(?i)\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)`)
 	html = re3.ReplaceAllString(html, "")
+	// 禁止 javascript: / vbscript: 图片地址
+	re4 := regexp.MustCompile(`(?i)\ssrc\s*=\s*([\"']?)\s*(javascript|vbscript|data\s*:\s*text)\s*:`)
+	html = re4.ReplaceAllString(html, ` src=$1#blocked:`)
 	return html
 }
 
 func htmlLooksEmpty(html string) bool {
+	low := strings.ToLower(html)
+	// 纯截图/图片也算有内容
+	if strings.Contains(low, "<img") || strings.Contains(low, "<video") {
+		return false
+	}
 	plain := html
 	plain = regexp.MustCompile(`(?is)<br\s*/?>`).ReplaceAllString(plain, "")
 	plain = regexp.MustCompile(`(?is)<[^>]+>`).ReplaceAllString(plain, "")
@@ -88,16 +97,115 @@ func htmlLooksEmpty(html string) bool {
 	return plain == ""
 }
 
+func (s *Store) textMediaDir(sessionID string) string {
+	return filepath.Join(s.textDir(), "media", sessionID)
+}
+
+// SaveTextMedia 保存聊天图片，返回可嵌入 HTML 的相对 URL
+func (s *Store) SaveTextMedia(sessionID, ext string, data []byte) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return "", errors.New("缺少活动 id")
+	}
+	if len(data) == 0 {
+		return "", errors.New("空文件")
+	}
+	if len(data) > 12<<20 {
+		return "", errors.New("图片不能超过 12MB")
+	}
+	ext = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ext), "."))
+	switch ext {
+	case "jpg", "jpeg", "png", "gif", "webp", "bmp":
+	default:
+		ext = "png"
+	}
+	dir := s.textMediaDir(sessionID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	name := newID(10) + "." + ext
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return "", err
+	}
+	return "/pass/public/text/media?id=" + sessionID + "&f=" + name, nil
+}
+
+// ResolveTextMedia 校验并返回媒体绝对路径
+func (s *Store) ResolveTextMedia(sessionID, file string) (string, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	file = filepath.Base(strings.TrimSpace(file))
+	if sessionID == "" || file == "" || file == "." || file == ".." {
+		return "", errors.New("无效文件")
+	}
+	if strings.ContainsAny(file, `/\`) {
+		return "", errors.New("无效文件名")
+	}
+	abs := filepath.Join(s.textMediaDir(sessionID), file)
+	st, err := os.Stat(abs)
+	if err != nil || st.IsDir() {
+		return "", errors.New("文件不存在")
+	}
+	return abs, nil
+}
+
+// Go RE2 不支持反向引用，双引号/单引号分开匹配
+var (
+	reDataImgDQ = regexp.MustCompile(`(?is)(<img\b[^>]*?\bsrc\s*=\s*)"(data:image/([a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+))"`)
+	reDataImgSQ = regexp.MustCompile(`(?is)(<img\b[^>]*?\bsrc\s*=\s*)'(data:image/([a-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+))'`)
+)
+
+func (s *Store) replaceDataImg(sessionID, html string, re *regexp.Regexp, quote string) string {
+	return re.ReplaceAllStringFunc(html, func(m string) string {
+		sub := re.FindStringSubmatch(m)
+		// 1=prefix 2=dataURL 3=mime 4=b64
+		if len(sub) < 5 {
+			return m
+		}
+		prefix, mimeExt, b64 := sub[1], sub[3], sub[4]
+		raw, err := base64.StdEncoding.DecodeString(strings.Map(func(r rune) rune {
+			if r == '\n' || r == '\r' || r == ' ' || r == '\t' {
+				return -1
+			}
+			return r
+		}, b64))
+		if err != nil || len(raw) == 0 {
+			return m
+		}
+		ext := strings.ToLower(mimeExt)
+		if i := strings.IndexByte(ext, '+'); i >= 0 {
+			ext = ext[:i]
+		}
+		if ext == "jpeg" {
+			ext = "jpg"
+		}
+		url, err := s.SaveTextMedia(sessionID, ext, raw)
+		if err != nil {
+			return m
+		}
+		return prefix + quote + url + quote
+	})
+}
+
+// materializeDataImages 把粘贴的 base64 图落到磁盘，避免 JSON 被截断成空气泡
+func (s *Store) materializeDataImages(sessionID, html string) string {
+	html = s.replaceDataImg(sessionID, html, reDataImgDQ, `"`)
+	html = s.replaceDataImg(sessionID, html, reDataImgSQ, `'`)
+	return html
+}
+
 func (s *Store) AddTextMessage(sessionID, nick, body, role string) (*TextMessage, error) {
 	body = strings.TrimSpace(body)
 	body = stripDangerousHTML(body)
+	// 先落盘图片再判空/限长（纯截图可发送）
+	body = s.materializeDataImages(sessionID, body)
 	if body == "" || htmlLooksEmpty(body) {
 		return nil, errors.New("内容不能为空")
 	}
-	// 富文本 HTML，限制长度
+	// 富文本 HTML（图片已是短 URL）；纯文字/格式消息限制
 	runes := []rune(body)
-	if len(runes) > 20000 {
-		body = string(runes[:20000])
+	if len(runes) > 100000 {
+		return nil, errors.New("内容过长，请删减后再发")
 	}
 	nick = strings.TrimSpace(nick)
 	if nick == "" {

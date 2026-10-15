@@ -1146,20 +1146,26 @@ func splitHostPortSafe(hostport string) (string, string, error) {
 }
 
 // RecordDownloadIP 按 IPv4 去重记录；同一文件同一 IP 只计 1 次。返回是否为新记录。
+// 写盘放在锁外：杀软扫描/磁盘卡顿时不能拖住全局 mu，否则全班进不了学生端。
 func (s *Store) RecordDownloadIP(sess *Session, fileName, ip string) bool {
 	ip = NormalizeIPv4(ip)
 	if sess == nil || fileName == "" || ip == "" {
 		return false
 	}
+	path := s.downloadsPath(sess)
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_ = os.MkdirAll(filepath.Dir(s.downloadsPath(sess)), 0755)
 	st := s.ReadDownloads(sess)
 	if st.IPs == nil {
 		st.IPs = map[string][]string{}
 	}
+	if st.Files == nil {
+		st.Files = map[string]int{}
+	}
 	for _, exist := range st.IPs[fileName] {
 		if exist == ip {
+			s.mu.Unlock()
 			return false
 		}
 	}
@@ -1167,10 +1173,11 @@ func (s *Store) RecordDownloadIP(sess *Session, fileName, ip string) bool {
 	st.Files[fileName] = len(st.IPs[fileName])
 	st.Total = st.UniqueIPTotal()
 	b, err := json.MarshalIndent(st, "", "  ")
+	s.mu.Unlock()
 	if err != nil {
 		return false
 	}
-	_ = os.WriteFile(s.downloadsPath(sess), b, 0644)
+	_ = os.WriteFile(path, b, 0644)
 	return true
 }
 

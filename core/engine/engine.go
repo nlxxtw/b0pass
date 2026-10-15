@@ -66,6 +66,8 @@ func init() {
 			"/pass/public/files",
 			"/pass/public/update-check",
 			"/pass/public/version",
+			"/pass/public/text/messages",
+			"/pass/public/text/media",
 			"/pass/session/list",
 			"/pass/session/stats",
 		},

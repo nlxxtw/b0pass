@@ -299,13 +299,13 @@
 
   function downloadMany(files) {
     if (!files || !files.length) return;
-    NP.toast("开始下载 " + files.length + " 个文件…");
+    NP.toast("已启动 " + files.length + " 个下载，请看浏览器下载栏");
     var i = 0;
     function next() {
       if (i >= files.length) return;
       var f = files[i++];
-      NP.downloadFile(f.url, f.name, f.size || 0);
-      setTimeout(next, 450);
+      NP.downloadFile(f.url, f.name);
+      setTimeout(next, 350);
     }
     next();
   }
@@ -461,8 +461,17 @@
 
       list.querySelectorAll(".getfile").forEach(function (btn) {
         btn.onclick = function () {
-          NP.toast("开始下载…");
-          NP.downloadFile(btn.dataset.url, btn.dataset.name, Number(btn.dataset.size) || 0);
+          // 先同步触发下载，再提示，避免感觉「卡在下载中」
+          NP.downloadFile(btn.dataset.url, btn.dataset.name);
+          var label = btn.dataset.name ? "「" + btn.dataset.name + "」" : "";
+          NP.toast("已启动下载" + label + "，请看浏览器下载栏");
+          btn.classList.add("busy");
+          var old = btn.textContent;
+          btn.textContent = "已启动";
+          setTimeout(function () {
+            btn.textContent = old || "下载";
+            btn.classList.remove("busy");
+          }, 1200);
         };
       });
       list.querySelectorAll(".openfile").forEach(function (btn) {
@@ -622,8 +631,6 @@
         refresh({ toast: true, force: true });
       };
     }
-    // 秒开：先拉任务，更新检查放后台，不挡首屏
-    NP.checkUpdate({ manual: false }).catch(function () {});
     try {
       await refresh({ force: true });
       if (!state.sessions.length) {

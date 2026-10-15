@@ -724,16 +724,6 @@
   }
 
   async function boot() {
-    var updBtn = $("checkUpdateBtn");
-    if (updBtn) {
-      updBtn.onclick = function () {
-        NP.checkUpdate({ manual: true });
-      };
-    }
-    // 有新版本则强制弹窗，未更新不能继续用
-    await NP.checkUpdate({ manual: false });
-    if (document.documentElement.classList.contains("update-locked")) return;
-
     $("loginBtn").onclick = tryLogin;
     $("loginPwd").onkeydown = function (e) {
       if (e.key === "Enter") tryLogin();

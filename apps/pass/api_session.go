@@ -771,7 +771,8 @@ func PublicDownload(c *gin.Context) {
 			if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
 				ip = strings.TrimSpace(strings.Split(xff, ",")[0])
 			}
-			sessStore.RecordDownloadIP(sess, fileName, ip)
+			// 异步记次数，避免写盘/杀软拖住下载与学生端页面
+			go sessStore.RecordDownloadIP(sess, fileName, ip)
 		}
 	}
 	serveAttachment(c, abs, fileName)
@@ -840,7 +841,16 @@ func serveAttachment(c *gin.Context, abs, fileName string) {
 		engine.ERR("文件不存在", c)
 		return
 	}
+
+	cw := &countingWriter{ResponseWriter: c.Writer}
+	c.Writer = cw
+	t0 := time.Now()
 	http.ServeContent(c.Writer, c.Request, fileName, st.ModTime(), f)
+	extra := fmt.Sprintf("fileSize=%s status=%d", humanBytes(st.Size()), c.Writer.Status())
+	if rng := c.GetHeader("Range"); rng != "" {
+		extra += " range=" + rng
+	}
+	logTransfer("DOWNLOAD", fileName, clientIPv4(c), cw.n, time.Since(t0), extra)
 }
 
 // passUploadToDir 学生/资料上传。
@@ -855,7 +865,10 @@ func passUploadToDir(dir string, c *gin.Context) {
 		return
 	}
 
+	t0 := time.Now()
+	// FormFile 会等到 multipart 收完（含网络传输时间）
 	file, err := c.FormFile("file")
+	recvCost := time.Since(t0)
 	if err != nil {
 		log.Println("passUploadToDir FormFile:", err)
 		engine.ERR("请先选择文件", c)
@@ -874,12 +887,14 @@ func passUploadToDir(dir string, c *gin.Context) {
 	_ = os.Remove(tmp)
 
 	log.Printf("passUploadToDir:::: size=%d name=%s dir=%s\n", file.Size, name, dir)
+	tSave := time.Now()
 	if err := c.SaveUploadedFile(file, tmp); err != nil {
 		_ = os.Remove(tmp)
 		log.Println("passUploadToDir SaveUploadedFile:", err)
 		engine.ERR("上传失败: "+err.Error(), c)
 		return
 	}
+	saveCost := time.Since(tSave)
 
 	st, err := os.Stat(tmp)
 	if err != nil {
@@ -926,6 +941,15 @@ func passUploadToDir(dir string, c *gin.Context) {
 		}
 	}
 
+	total := time.Since(t0)
+	extra := fmt.Sprintf(
+		"recv=%s save=%s dir=%s",
+		recvCost.Round(time.Millisecond),
+		saveCost.Round(time.Millisecond),
+		dir,
+	)
+	// 吞吐按「接收完成」时间算（含网络）；save 多为本机拷贝
+	logTransfer("UPLOAD", name, clientIPv4(c), st.Size(), recvCost, extra+" total="+total.Round(time.Millisecond).String())
 	log.Printf("passUploadToDir OK:::: %s (%d bytes)\n", final, st.Size())
 	engine.OK("上传成功", gin.H{"name": name, "size": st.Size()}, c)
 }

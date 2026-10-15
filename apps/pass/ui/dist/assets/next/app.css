@@ -927,6 +927,22 @@ html.update-locked .login-gate {
 .text-bubble.btext pre {
   max-width: 100% !important;
 }
+.text-bubble.btext img {
+  height: auto !important;
+  max-height: min(360px, 50vh);
+  border-radius: 8px;
+  display: block;
+  margin: 4px 0;
+  background: rgba(0, 0, 0, 0.04);
+}
+.rt-editor img {
+  max-width: 100%;
+  max-height: 220px;
+  height: auto;
+  border-radius: 8px;
+  display: block;
+  margin: 4px 0;
+}
 .text-composer {
   border-top: 1px solid var(--line);
   padding-top: 10px;

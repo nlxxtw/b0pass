@@ -1,9 +1,9 @@
-.DS_Store
-.idea
-tmp
+# local / build
+bin/
+*.exe
+*.syso
+main/*.syso
+.firecrawl/
+files/
+**/files/
 *.log
-boot/resource.go
-main/files/*
-zdoc/*.zip
-zdoc/*/b0pass
-zdoc/*/b0pass.exe

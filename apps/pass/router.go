@@ -79,6 +79,8 @@ func routeApi() {
 	engine.Gin.POST("/pass/public/reveal", PublicReveal)
 	GET("/public/reveal", "{id,f}", "本机打开", PublicReveal)
 	GET("/public/text/messages", "{id}", "发文本消息列表", PublicTextMessages)
+	GET("/public/text/media", "{id,f}", "发文本图片", PublicTextMedia)
+	engine.Gin.POST("/pass/public/text/upload", PublicTextUpload)
 	engine.Gin.POST("/pass/public/text/send", PublicTextSend)
 	engine.Gin.POST("/pass/public/text/delete", PublicTextDelete)
 

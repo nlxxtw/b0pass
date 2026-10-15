@@ -3,6 +3,9 @@ package app
 import (
 	"b0go/apps/pass/session"
 	"b0go/core/engine"
+	"io"
+	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -88,6 +91,86 @@ func PublicTextMessages(c *gin.Context) {
 		"myNick":    clientIPv4(c),
 		"teacherIp": strings.TrimSpace(sess.TeacherIP),
 	}, c)
+}
+
+// PublicTextUpload 聊天图片上传（截图/选图），返回可直接插入的 URL
+func PublicTextUpload(c *gin.Context) {
+	id := strings.TrimSpace(c.PostForm("id"))
+	if id == "" {
+		id = strings.TrimSpace(c.Query("id"))
+	}
+	sess, err := requireTextSession(id)
+	if err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
+	fh, err := c.FormFile("file")
+	if err != nil {
+		engine.ERR("请选择图片", c)
+		return
+	}
+	if fh.Size > 12<<20 {
+		engine.ERR("图片不能超过 12MB", c)
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		engine.ERR("读取失败", c)
+		return
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 12<<20+1))
+	if err != nil {
+		engine.ERR("读取失败", c)
+		return
+	}
+	if len(data) == 0 {
+		engine.ERR("空文件", c)
+		return
+	}
+	if len(data) > 12<<20 {
+		engine.ERR("图片不能超过 12MB", c)
+		return
+	}
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(fh.Filename), "."))
+	if ext == "" {
+		ct := fh.Header.Get("Content-Type")
+		switch {
+		case strings.Contains(ct, "jpeg"):
+			ext = "jpg"
+		case strings.Contains(ct, "png"):
+			ext = "png"
+		case strings.Contains(ct, "gif"):
+			ext = "gif"
+		case strings.Contains(ct, "webp"):
+			ext = "webp"
+		default:
+			ext = "png"
+		}
+	}
+	url, err := sessStore.SaveTextMedia(sess.ID, ext, data)
+	if err != nil {
+		engine.ERR(err.Error(), c)
+		return
+	}
+	engine.OK("OK", gin.H{"url": url}, c)
+}
+
+// PublicTextMedia 读取聊天图片
+func PublicTextMedia(c *gin.Context) {
+	id := strings.TrimSpace(c.Query("id"))
+	name := strings.TrimSpace(c.Query("f"))
+	if _, err := requireTextSession(id); err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	abs, err := sessStore.ResolveTextMedia(id, name)
+	if err != nil {
+		c.Status(http.StatusNotFound)
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=86400")
+	c.File(abs)
 }
 
 // PublicTextSend 发送文本（昵称=IPv4；教师标签绑定管理端首次发消息的 IP）
