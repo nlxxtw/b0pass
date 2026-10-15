@@ -132,43 +132,10 @@ jobs:
         run: |
           set -euo pipefail
           PKG="dist/${{ matrix.artifact }}"
-          printf '%s\n' \
-            '[gateway]' \
-            'ListenAddr = ":8000"' \
-            'Domain = ""' \
-            '' \
-            '[pass]' \
-            'Path = "files"' \
-            'CodeReadWrite = "admin"' \
-            'CodeReadOnly = ""' \
-            'LockUploadDir = ""' \
-            > "$PKG/config.ini"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            cp main/app.manifest "$PKG/nextpass.exe.manifest"
-            printf '%s\n' \
-              '# NextPass Windows' \
-              '' \
-              '1. 双击 nextpass.exe → 打开「教师机面板」（不是黑框）' \
-              '2. 面板里可改端口/密码、启动停止、看日志、检查更新' \
-              '3. 关闭面板窗口 = 停止局域网服务' \
-              '4. 学生浏览器打开 http://老师IP:8000/' \
-              '5. 管理端也可从面板「打开管理端」（默认口令 admin）' \
-              '' \
-              '说明：Windows 包在 GitHub Actions 里嵌入了 GUI 清单，教室机无需再装 WebView2。' \
-              '请保持 nextpass.exe.manifest 与 exe 在同一目录（备用）。' \
-              > "$PKG/readme.md"
-          else
-            printf '%s\n' \
-              '# NextPass' \
-              '' \
-              '1. 运行 ./nextpass' \
-              '2. 学生打开 http://老师IP:8000/' \
-              '3. 老师打开 http://老师IP:8000/admin （默认口令 admin）' \
-              > "$PKG/readme.md"
+          # 发布包只留可执行文件，尽量干净：
+          # config.ini / zlib1.dll 首次运行自动生成；GUI 清单已打进 exe
+          if [ "${{ matrix.goos }}" != "windows" ]; then
             chmod +x "$PKG/${{ matrix.binary }}"
-          fi
-          if [ "${{ matrix.goos }}" = "windows" ] && [ -f "zdoc/b0pass-win/zlib1.dll" ]; then
-            cp "zdoc/b0pass-win/zlib1.dll" "$PKG/zlib1.dll"
           fi
 
       - name: Zip artifact
@@ -231,7 +198,7 @@ jobs:
             NextPass 局域网作业助手（基于 b0pass 改造）
 
             ## 下载
-            - **Windows（教师机面板壳）**: `nextpass-win.zip` — Actions 嵌入 GUI 清单，双击出面板，无需 WebView2
+            - **Windows（教师机面板）**: `nextpass-win.zip` — 解压后基本只需 `nextpass.exe`
             - **Linux**: `nextpass-linux.zip`
             - **macOS Apple Silicon (M1/M2/M3)**: `nextpass-mac-arm64.zip`
             - **macOS Intel**: `nextpass-mac-intel.zip`
