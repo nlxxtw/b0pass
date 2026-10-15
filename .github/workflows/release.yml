@@ -92,9 +92,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # 嵌入 Common Controls + DPI 清单，修复 walk 面板 TTM_ADDTOOL；无需 WebView2
+          # 嵌入 GUI 清单 + 应用图标（explorer / 任务栏 / 面板窗口）
           rm -f rsrc_windows_amd64.syso *.syso
-          go run github.com/akavel/rsrc@v0.10.2 -manifest app.manifest -o rsrc_windows_amd64.syso
+          test -f icon.ico
+          go run github.com/akavel/rsrc@v0.10.2 -manifest app.manifest -ico icon.ico -o rsrc_windows_amd64.syso
           ls -lh rsrc_windows_amd64.syso
 
       - name: Build

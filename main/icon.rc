@@ -1,2 +1,2 @@
-//windres -o main.syso icon.rc
+// windres / rsrc: application icon
 IDI_ICON1 ICON "icon.ico"

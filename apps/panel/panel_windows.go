@@ -264,6 +264,18 @@ func RunDesktop() bool {
 	_ = verLabel.SetText("v" + passapp.AppVersion)
 	applyState(buildState(""))
 
+	// 窗口图标：优先用打进 exe 的资源；否则旁路 icon.ico
+	if ico, err := walk.NewIconFromResourceId(2); err == nil {
+		_ = mw.SetIcon(ico)
+	} else if ico, err := walk.NewIconFromResourceId(3); err == nil {
+		_ = mw.SetIcon(ico)
+	} else if exe, err := os.Executable(); err == nil {
+		p := filepath.Join(filepath.Dir(exe), "icon.ico")
+		if ico, err := walk.NewIconFromFile(p); err == nil {
+			_ = mw.SetIcon(ico)
+		}
+	}
+
 	go func() {
 		st, _ := doStart(true)
 		syncApply(st)
