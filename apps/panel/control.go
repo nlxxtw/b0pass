@@ -114,6 +114,10 @@ func friendlyStartErr(err error) string {
 }
 
 func doStart(openBrowser bool) (State, error) {
+	if forceUpdateLocked {
+		msg := "发现新版本，请先完成更新后再启动"
+		return buildState(msg), fmt.Errorf("%s", msg)
+	}
 	if err := ensureBooted(); err != nil {
 		return buildState(err.Error()), err
 	}

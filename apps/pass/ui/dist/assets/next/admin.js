@@ -728,6 +728,10 @@
     $("loginPwd").onkeydown = function (e) {
       if (e.key === "Enter") tryLogin();
     };
+    // 有新版本则锁定整个教师端（含登录页）
+    if (await NP.checkUpdate({})) {
+      return;
+    }
     if (!NP.getToken()) {
       showLogin();
       return;

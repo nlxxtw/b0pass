@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -76,7 +78,10 @@ func assetNameForOS() string {
 	case "windows":
 		return "nextpass-win.zip"
 	case "darwin":
-		return "nextpass-mac.zip"
+		if runtime.GOARCH == "arm64" {
+			return "nextpass-mac-arm64.zip"
+		}
+		return "nextpass-mac-intel.zip"
 	default:
 		return "nextpass-linux.zip"
 	}
@@ -180,6 +185,84 @@ func CheckUpdateInfo() UpdateInfo {
 		out.NeedUpdate = true
 	}
 	return out
+}
+
+// DownloadUpdateZip 把对应平台安装包下到目录（默认程序旁 _update）
+func DownloadUpdateZip(info UpdateInfo) (string, error) {
+	url := strings.TrimSpace(info.DownloadURL)
+	if url == "" {
+		return "", fmt.Errorf("无下载地址")
+	}
+	name := strings.TrimSpace(info.Asset)
+	if name == "" {
+		name = assetNameForOS()
+	}
+	dir := ""
+	if exe, err := os.Executable(); err == nil {
+		dir = filepath.Join(filepath.Dir(exe), "_update")
+	}
+	if dir == "" {
+		dir = filepath.Join("files", "_nextpass", "_update")
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, name)
+	tmp := dest + ".part"
+
+	client := &http.Client{Timeout: 8 * time.Minute}
+	urls := []string{url}
+	// 若镜像失败再试原始 github
+	if strings.HasPrefix(url, GithubMirror) {
+		raw := strings.TrimPrefix(url, GithubMirror)
+		if raw != "" && raw != url {
+			urls = append(urls, raw)
+		}
+	}
+	var lastErr error
+	for _, u := range urls {
+		req, err := http.NewRequest(http.MethodGet, u, nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Header.Set("User-Agent", "NextPass/"+AppVersion)
+		res, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if res.StatusCode != 200 {
+			b, _ := io.ReadAll(io.LimitReader(res.Body, 512))
+			res.Body.Close()
+			lastErr = fmt.Errorf("下载失败 HTTP %d: %s", res.StatusCode, string(b))
+			continue
+		}
+		f, err := os.Create(tmp)
+		if err != nil {
+			res.Body.Close()
+			lastErr = err
+			continue
+		}
+		_, err = io.Copy(f, res.Body)
+		res.Body.Close()
+		_ = f.Close()
+		if err != nil {
+			_ = os.Remove(tmp)
+			lastErr = err
+			continue
+		}
+		_ = os.Remove(dest)
+		if err := os.Rename(tmp, dest); err != nil {
+			lastErr = err
+			continue
+		}
+		return dest, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("下载失败")
+	}
+	return "", lastErr
 }
 
 // PublicUpdateCheck 检查 GitHub Releases 是否有新版本（强制更新用）

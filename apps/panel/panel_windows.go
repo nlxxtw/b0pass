@@ -86,10 +86,17 @@ func RunDesktop() bool {
 			}
 			_ = linkLabel.SetText(msg)
 		}
-		btnStart.SetEnabled(!on)
-		btnStop.SetEnabled(on)
-		btnAdmin.SetEnabled(on)
-		btnStudent.SetEnabled(on)
+		if forceUpdateLocked {
+			btnStart.SetEnabled(false)
+			btnStop.SetEnabled(false)
+			btnAdmin.SetEnabled(false)
+			btnStudent.SetEnabled(false)
+		} else {
+			btnStart.SetEnabled(!on)
+			btnStop.SetEnabled(on)
+			btnAdmin.SetEnabled(on)
+			btnStudent.SetEnabled(on)
+		}
 	}
 
 	syncApply := func(st State) {
@@ -197,24 +204,8 @@ func RunDesktop() bool {
 										}
 									}},
 									PushButton{Text: "检查更新", OnClicked: func() {
-										_ = tipLB.SetText("正在检查...")
-										go func() {
-											u := passapp.CheckUpdateInfo()
-											mw.Synchronize(func() {
-												if u.CheckError != "" {
-													_ = tipLB.SetText("检查失败: " + u.CheckError)
-													return
-												}
-												if u.NeedUpdate {
-													_ = tipLB.SetText(fmt.Sprintf("有新版本 v%s (当前 v%s)", u.Latest, u.Current))
-													if u.DownloadURL != "" && walk.MsgBox(mw, "发现新版本", "是否打开下载页?", walk.MsgBoxYesNo|walk.MsgBoxIconQuestion) == walk.DlgCmdYes {
-														_ = cmd.Open(u.DownloadURL)
-													}
-												} else {
-													_ = tipLB.SetText("已是最新 v" + u.Current)
-												}
-											})
-										}()
+										_ = tipLB.SetText("正在检查更新…")
+										go runForceUpdateCheck(mw, tipLB, btnStart, btnStop, btnAdmin, btnStudent, true)
 									}},
 								},
 							},
@@ -277,7 +268,12 @@ func RunDesktop() bool {
 
 	_ = logEdit.SetText(applog.Tail(120 << 10))
 
+	// 先强制检查更新：有新版本则封锁面板并自动下载，不启动服务
 	go func() {
+		blocked := runForceUpdateCheck(mw, tipLB, btnStart, btnStop, btnAdmin, btnStudent, false)
+		if blocked {
+			return
+		}
 		st, _ := doStart(true)
 		syncApply(st)
 	}()
@@ -301,5 +297,102 @@ func RunDesktop() bool {
 
 	mw.Run()
 	_ = gateway.StopServer()
+	return true
+}
+
+// runForceUpdateCheck 发现新版本时：停服务、锁按钮、弹窗、自动下载安装包。
+// 返回 true 表示必须更新、不可继续用旧版。
+func runForceUpdateCheck(
+	mw *walk.MainWindow,
+	tipLB *walk.Label,
+	btnStart, btnStop, btnAdmin, btnStudent *walk.PushButton,
+	manual bool,
+) bool {
+	u := passapp.CheckUpdateInfo()
+	if u.CheckError != "" {
+		applog.Info("更新检查失败: %s", u.CheckError)
+		if mw != nil {
+			mw.Synchronize(func() {
+				if tipLB != nil {
+					msg := "暂时无法检查更新（网络）"
+					if manual {
+						msg = "检查失败: " + u.CheckError
+					}
+					_ = tipLB.SetText(msg)
+				}
+				if manual {
+					walk.MsgBox(mw, "检查更新", "暂时连不上更新服务器，请稍后重试或检查网络。", walk.MsgBoxIconWarning)
+				}
+			})
+		}
+		return false
+	}
+	if !u.NeedUpdate {
+		if mw != nil && manual {
+			mw.Synchronize(func() {
+				if tipLB != nil {
+					_ = tipLB.SetText("已是最新 v" + u.Current)
+				}
+				walk.MsgBox(mw, "检查更新", "当前已是最新版本 v"+u.Current, walk.MsgBoxIconInformation)
+			})
+		}
+		return false
+	}
+
+	applog.Info("强制更新: 当前 v%s → 最新 v%s", u.Current, u.Latest)
+	forceUpdateLocked = true
+	_ = gateway.StopServer()
+
+	if mw != nil {
+		mw.Synchronize(func() {
+			if tipLB != nil {
+				_ = tipLB.SetText(fmt.Sprintf("必须更新到 v%s（当前 v%s）", u.Latest, u.Current))
+			}
+			if btnStart != nil {
+				btnStart.SetEnabled(false)
+			}
+			if btnStop != nil {
+				btnStop.SetEnabled(false)
+			}
+			if btnAdmin != nil {
+				btnAdmin.SetEnabled(false)
+			}
+			if btnStudent != nil {
+				btnStudent.SetEnabled(false)
+			}
+			walk.MsgBox(mw, "必须更新",
+				fmt.Sprintf("发现新版本 v%s（当前 v%s）。\n\n旧版本不能继续使用，正在自动下载安装包…", u.Latest, u.Current),
+				walk.MsgBoxIconWarning)
+		})
+	}
+
+	dest, err := passapp.DownloadUpdateZip(u)
+	if mw != nil {
+		mw.Synchronize(func() {
+			if err != nil {
+				applog.Info("自动下载失败: %v", err)
+				if tipLB != nil {
+					_ = tipLB.SetText("自动下载失败，请点「检查更新」重试或打开下载页")
+				}
+				if u.DownloadURL != "" {
+					_ = cmd.Open(u.DownloadURL)
+				} else if u.ReleaseURL != "" {
+					_ = cmd.Open(u.ReleaseURL)
+				}
+				walk.MsgBox(mw, "请手动下载",
+					"自动下载失败，已尝试打开下载页。\n请下载 nextpass-win.zip，解压后覆盖本目录的 nextpass.exe，再重新打开。",
+					walk.MsgBoxIconError)
+				return
+			}
+			dir := filepath.Dir(dest)
+			_ = cmd.Open(dir)
+			if tipLB != nil {
+				_ = tipLB.SetText("新版本已下载，请解压覆盖后重启")
+			}
+			walk.MsgBox(mw, "请完成更新",
+				fmt.Sprintf("新版本已下载到：\n%s\n\n请解压，用新的 nextpass.exe 覆盖旧文件，然后重新打开本程序。\n覆盖完成前旧版本无法使用。", dest),
+				walk.MsgBoxIconInformation)
+		})
+	}
 	return true
 }

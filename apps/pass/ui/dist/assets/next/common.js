@@ -740,7 +740,8 @@
       '<div class="card force-card">' +
       "<h2>发现新版本，请更新后继续使用</h2>" +
       '<p class="meta" id="forceUpdateMeta"></p>' +
-      '<button type="button" class="btn block" id="forceUpdateBtn">立即更新</button>' +
+      '<p class="hint warn" style="margin:12px 0">旧版本已停用。请在教师机面板下载新包，解压覆盖 nextpass.exe 后重新打开。</p>' +
+      '<button type="button" class="btn block" id="forceUpdateBtn">立即下载新版本</button>' +
       "</div>";
     document.body.appendChild(el);
     return el;
@@ -751,18 +752,56 @@
       toast("暂无下载地址");
       return;
     }
-    // 加速镜像拉 Releases
-    window.open(url, "_blank", "noopener");
-    toast("已开始下载，请解压覆盖后重启");
+    var a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    toast("正在下载，解压覆盖教师机程序后重启");
   }
 
-  // 浏览器端不再弹强制更新/显示版本条；更新请在教师机桌面面板操作
+  // 有新版本时锁定教师端；返回 true 表示已锁定
   async function checkUpdate(opts) {
     opts = opts || {};
-    if (opts.manual) {
-      toast("请到教师机「NextPass 面板」里检查更新");
+    try {
+      var data = await api("/pass/public/update-check");
+      if (!data || !data.needUpdate) {
+        if (opts.manual) {
+          toast("已是最新版本 v" + ((data && data.current) || ""));
+        }
+        return false;
+      }
+      var el = ensureUpdateModal();
+      var meta = document.getElementById("forceUpdateMeta");
+      if (meta) {
+        meta.textContent =
+          "当前 v" +
+          data.current +
+          " → 最新 v" +
+          data.latest +
+          "。请更新教师机程序后才能继续使用。";
+      }
+      var btn = document.getElementById("forceUpdateBtn");
+      var url = data.downloadUrl || data.releaseUrl;
+      if (btn) {
+        btn.onclick = function () {
+          openUpdateDownload(url);
+        };
+      }
+      el.hidden = false;
+      document.documentElement.classList.add("update-locked");
+      if (!opts.skipAutoDownload) {
+        openUpdateDownload(url);
+      }
+      return true;
+    } catch (e) {
+      if (opts.manual) {
+        toast("检查更新失败：" + (e.message || e));
+      }
+      return false;
     }
-    return null;
   }
 
   global.NP = {
