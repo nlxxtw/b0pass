@@ -78,6 +78,25 @@ button, input, select { font: inherit; }
   flex: 1 1 auto;
   max-width: min(100%, 520px);
 }
+.brand-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  display: block;
+  border-radius: 8px;
+}
+.brand-mark-lg {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+}
 .brand .logo {
   margin: 0;
 }
@@ -666,6 +685,10 @@ html.update-locked .login-gate {
     flex: 1 1 auto;
     min-width: 0;
     max-width: none;
+  }
+  .brand-mark {
+    width: 30px;
+    height: 30px;
   }
   .logo {
     font-size: 22px;
