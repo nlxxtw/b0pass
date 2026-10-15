@@ -6,7 +6,7 @@ on:
       version:
         description: "Release tag (e.g. v2.1.0)"
         required: true
-        default: "v2.1.7"
+        default: "v2.1.8"
       prerelease:
         description: "Mark as pre-release"
         required: false
@@ -133,8 +133,8 @@ jobs:
         run: |
           set -euo pipefail
           PKG="dist/${{ matrix.artifact }}"
-          # 发布包只留可执行文件，尽量干净：
-          # config.ini / zlib1.dll 首次运行自动生成；GUI 清单已打进 exe
+          # 发布包只留可执行文件：
+          # config.ini 首次运行自动生成；GUI 清单已打进 exe（不写旁路 .manifest）
           if [ "${{ matrix.goos }}" != "windows" ]; then
             chmod +x "$PKG/${{ matrix.binary }}"
           fi

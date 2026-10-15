@@ -19,48 +19,30 @@ import (
 	. "github.com/lxn/walk/declarative"
 )
 
-// 与 exe 同目录的清单：修复 walk「TTM_ADDTOOL failed」（教室机无需 WebView2）
-const exeManifest = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <assemblyIdentity version="2.1.5.0" name="NextPass" type="win32"/>
-  <dependency>
-    <dependentAssembly>
-      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
-    </dependentAssembly>
-  </dependency>
-  <application xmlns="urn:schemas-microsoft-com:asm.v3">
-    <windowsSettings>
-      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true</dpiAware>
-    </windowsSettings>
-  </application>
-</assembly>
-`
-
-func ensureManifestBesideExe() {
-	exe, err := os.Executable()
-	if err != nil {
-		return
-	}
-	path := exe + ".manifest"
-	_ = os.WriteFile(path, []byte(exeManifest), 0644)
-	// 工作目录旁也放一份，双击不同位置都能找到
-	_ = os.WriteFile("nextpass.exe.manifest", []byte(exeManifest), 0644)
-}
-
 func panelErr(msg string) {
 	_ = os.MkdirAll(filepath.Join("files", "_nextpass"), 0755)
 	_ = os.WriteFile(filepath.Join("files", "_nextpass", "panel_error.txt"), []byte(time.Now().Format("2006-01-02 15:04:05")+" "+msg+"\n"), 0644)
 	walk.MsgBox(nil, "NextPass", msg, walk.MsgBoxIconError)
 }
 
+func resolveLogPath() string {
+	logPath := filepath.Join("files", "_nextpass", "app.log")
+	cfg := loadPanelConfig()
+	if p := strings.TrimSpace(cfg.Path); p != "" {
+		logPath = filepath.Join(p, "_nextpass", "app.log")
+	}
+	return logPath
+}
+
 // RunDesktop 原生面板。成功返回 true。
 func RunDesktop() bool {
-	ensureManifestBesideExe()
-
 	_ = os.MkdirAll("files", 0666)
 	if _, err := os.Stat(configFileName); err != nil {
 		_ = savePanelConfig(defaultPanelConfig())
 	}
+	// 尽早挂上文件日志，面板「运行日志」里马上能看到
+	_ = applog.Setup(resolveLogPath())
+	applog.Info("面板已打开")
 
 	var (
 		mw                                      *walk.MainWindow
@@ -233,10 +215,16 @@ func RunDesktop() bool {
 						Title:  "运行日志",
 						Layout: VBox{},
 						Children: []Widget{
+							Label{Text: "文件位置: " + resolveLogPath() + "（自动刷新）"},
 							Composite{
 								Layout: HBox{},
 								Children: []Widget{
 									PushButton{Text: "刷新", OnClicked: func() { _ = logEdit.SetText(applog.Tail(120 << 10)) }},
+									PushButton{Text: "打开日志目录", OnClicked: func() {
+										dir := filepath.Dir(resolveLogPath())
+										_ = os.MkdirAll(dir, 0755)
+										_ = cmd.Open(dir)
+									}},
 									PushButton{Text: "清空显示", OnClicked: func() { _ = logEdit.SetText("") }},
 									HSpacer{},
 								},
@@ -252,7 +240,7 @@ func RunDesktop() bool {
 	}.Create()
 
 	if err != nil {
-		panelErr("面板创建失败: " + err.Error() + "\n\n若提示 TTM_ADDTOOL：请确认程序目录有 nextpass.exe.manifest，然后重新打开一次。")
+		panelErr("面板创建失败: " + err.Error())
 		return false
 	}
 
@@ -276,9 +264,28 @@ func RunDesktop() bool {
 		}
 	}
 
+	_ = logEdit.SetText(applog.Tail(120 << 10))
+
 	go func() {
 		st, _ := doStart(true)
 		syncApply(st)
+	}()
+
+	// 运行日志每 2 秒自动刷新
+	go func() {
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		for range t.C {
+			if mw == nil {
+				return
+			}
+			txt := applog.Tail(120 << 10)
+			mw.Synchronize(func() {
+				if logEdit != nil {
+					_ = logEdit.SetText(txt)
+				}
+			})
+		}
 	}()
 
 	mw.Run()

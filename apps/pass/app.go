@@ -4,9 +4,7 @@ import (
 	"b0go/core/engine"
 	"log"
 	"net/http"
-	"os"
 	"path"
-	"runtime"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -88,21 +86,6 @@ func JWTMiddleware(mode string) func(c *gin.Context) {
 			// 用c.Get("user")获取当前请求用户信息
 			c.Set("user", mc.User)
 			c.Next()
-		}
-	}
-}
-
-// 释放dll文件
-func putDll() {
-	if runtime.GOOS == "windows" && !config.Live {
-		_, errNow := os.ReadFile("zlib1.dll")
-		if errNow != nil {
-			dll, err := uiFS.ReadFile("ui/dist/dll/zlib1.dll")
-			if err != nil {
-				log.Println("zlib1.dll err:", err)
-			} else {
-				os.WriteFile("zlib1.dll", dll, 0777)
-			}
 		}
 	}
 }

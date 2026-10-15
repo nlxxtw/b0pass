@@ -58,5 +58,4 @@ func run() {
 	routeStatic(config.Live)
 	routeApi()
 	routeWs()
-	putDll()
 }
