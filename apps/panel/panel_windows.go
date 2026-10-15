@@ -67,10 +67,17 @@ func RunDesktop() bool {
 			return
 		}
 		_ = verLabel.SetText("v" + st.Version)
+		if portEdit != nil && strings.TrimSpace(st.Port) != "" {
+			_ = portEdit.SetText(st.Port)
+		}
 		on := st.Running
 		if on {
 			_ = statusLabel.SetText("服务运行中")
-			_ = linkLabel.SetText("学生: " + st.StudentURL + "\r\n管理: " + st.AdminURL)
+			line := "学生: " + st.StudentURL + "\r\n管理: " + st.AdminURL
+			if strings.Contains(st.Message, "已自动改用") {
+				line = st.Message + "\r\n" + line
+			}
+			_ = linkLabel.SetText(line)
 		} else {
 			_ = statusLabel.SetText("服务未启动")
 			msg := st.Message
@@ -144,7 +151,9 @@ func RunDesktop() bool {
 										}
 										st, err := doStart(autoOpenCB.Checked())
 										if err != nil {
-											walk.MsgBox(mw, "启动失败", err.Error(), walk.MsgBoxIconError)
+											walk.MsgBox(mw, "无法启动", st.Message, walk.MsgBoxIconWarning)
+										} else if strings.Contains(st.Message, "已自动改用") {
+											walk.MsgBox(mw, "端口已调整", st.Message, walk.MsgBoxIconInformation)
 										}
 										applyState(st)
 									}},
@@ -169,7 +178,9 @@ func RunDesktop() bool {
 										}
 										st, err := doRestart()
 										if err != nil {
-											walk.MsgBox(mw, "重启失败", err.Error(), walk.MsgBoxIconError)
+											walk.MsgBox(mw, "无法启动", st.Message, walk.MsgBoxIconWarning)
+										} else if strings.Contains(st.Message, "已自动改用") {
+											walk.MsgBox(mw, "端口已调整", st.Message, walk.MsgBoxIconInformation)
 										}
 										applyState(st)
 									}},

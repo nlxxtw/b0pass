@@ -2,6 +2,7 @@ package panel
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,21 +82,76 @@ func buildState(msg string) State {
 	return st
 }
 
+func isAddrInUse(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "only one usage") ||
+		strings.Contains(msg, "address already in use") ||
+		strings.Contains(msg, "eaddrinuse") ||
+		(strings.Contains(msg, "bind") && strings.Contains(msg, "10048"))
+}
+
+func findFreeTCPPort() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	defer ln.Close()
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		return "", err
+	}
+	return port, nil
+}
+
+func friendlyStartErr(err error) string {
+	if isAddrInUse(err) {
+		return "这个端口正被其它程序占用。请换一个端口，或关掉占用它的程序后再试。"
+	}
+	return "启动失败，请稍后重试。若一直不行，可换个端口再试。"
+}
+
 func doStart(openBrowser bool) (State, error) {
 	if err := ensureBooted(); err != nil {
 		return buildState(err.Error()), err
 	}
 	cfg := loadPanelConfig()
-	addr := gateway.NormalizeListenAddr(cfg.Port)
-	if err := gateway.StartServer(addr); err != nil {
-		applog.Info("启动失败: %v", err)
-		return buildState("启动失败: " + err.Error()), err
+	wanted := strings.TrimSpace(cfg.Port)
+	if wanted == "" {
+		wanted = "8000"
 	}
-	applog.Info("服务已启动 %s 学生=%s", addr, buildState("").StudentURL)
+	addr := gateway.NormalizeListenAddr(wanted)
+	err := gateway.StartServer(addr)
+	note := ""
+	if err != nil && isAddrInUse(err) {
+		free, ferr := findFreeTCPPort()
+		if ferr == nil && free != "" && free != wanted {
+			cfg.Port = free
+			_ = savePanelConfig(cfg)
+			applyRuntimeConfig(cfg)
+			err = gateway.StartServer(gateway.NormalizeListenAddr(free))
+			if err == nil {
+				note = fmt.Sprintf("端口 %s 已被占用，已自动改用 %s。请让学生用新地址访问。", wanted, free)
+				applog.Info(note)
+			}
+		}
+	}
+	if err != nil {
+		msg := friendlyStartErr(err)
+		applog.Info("%s 原始错误: %v", msg, err)
+		return buildState(msg), err
+	}
+	st := buildState("服务已启动")
+	if note != "" {
+		st = buildState(note)
+	}
+	applog.Info("服务已启动 %s 学生=%s", gateway.CurrentAddr(), st.StudentURL)
 	if openBrowser || cfg.AutoOpen {
-		_ = cmd.Open(buildState("").AdminURL)
+		_ = cmd.Open(st.AdminURL)
 	}
-	return buildState("服务已启动"), nil
+	return st, nil
 }
 
 func doStop() State {

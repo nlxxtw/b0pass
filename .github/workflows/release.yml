@@ -6,7 +6,7 @@ on:
       version:
         description: "Release tag (e.g. v2.1.0)"
         required: true
-        default: "v2.1.8"
+        default: "v2.1.9"
       prerelease:
         description: "Mark as pre-release"
         required: false
